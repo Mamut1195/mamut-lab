@@ -7,7 +7,7 @@
 use mamut_charts::{LineChartSpec, Rect, Scale, line_chart};
 use mamut_domain::Material;
 use rune::shape::Shape;
-use rune::{Cx, El, Key, KeyEvent, Tx, col, el, row, text};
+use rune::{Cx, El, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{Cell, Kit, SortDir, Table, TableColumn, TextField};
 
 use crate::state::{AppState, Nav, SampleRow};
@@ -681,6 +681,104 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         column.children(lines)
     });
 
+    let limit_rows: Vec<El> = (0..state.limits.rows.len())
+        .map(|index| {
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(
+                    TextField::new("Golpes", &state.limits.rows[index].blows)
+                        .placeholder("N")
+                        .on_edit(move |s: &mut AppState| &mut s.limits.rows[index].blows)
+                        .build(&kit)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+                .child(
+                    TextField::new("Humedad (%)", &state.limits.rows[index].moisture)
+                        .placeholder("%")
+                        .on_edit(move |s: &mut AppState| &mut s.limits.rows[index].moisture)
+                        .build(&kit)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+        })
+        .collect();
+
+    let limits_result: Option<El> = state.limits.outcome.as_ref().map(|outcome| {
+        let mut column = col()
+            .key("limits-result")
+            .w_full()
+            .gap(2.0)
+            .padding(10.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.bg_deep)
+            .child(
+                text(format!("Límite líquido: {:.1} %", outcome.liquid_limit))
+                    .font(kit.ty.small)
+                    .color(kit.c.text_base),
+            )
+            .child(
+                text(format!(
+                    "{} determinaciones · pendiente {:.2} · R² {:.3}",
+                    outcome.determinations, outcome.slope, outcome.r_squared
+                ))
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+            );
+        if outcome.blows_outside_range {
+            column = column.child(
+                text("⚠ alguna determinación cae fuera del rango habitual de golpes")
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_base),
+            );
+        }
+        if let (Some(plastic), Some(index)) = (outcome.plastic_limit, outcome.plasticity_index) {
+            column = column.child(
+                text(format!(
+                    "Límite plástico: {plastic:.1} % · índice de plasticidad: {index:.1}"
+                ))
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+            );
+        }
+        column
+    });
+
+    let density_result: Option<El> = state.density.outcome.as_ref().map(|outcome| {
+        let mut column = col()
+            .key("density-result")
+            .w_full()
+            .gap(2.0)
+            .padding(10.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.bg_deep)
+            .child(
+                text(format!(
+                    "Densidad seca: {:.3} g/cm³ · compactación {:.1} %",
+                    outcome.dry_density, outcome.relative_compaction
+                ))
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+            )
+            .child(
+                text(format!(
+                    "Desviación de humedad: {:+.1} puntos",
+                    outcome.moisture_deviation
+                ))
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+            );
+        for warning in &outcome.warnings {
+            column = column.child(
+                text(format!("⚠ {warning}"))
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_base),
+            );
+        }
+        column
+    });
+
     let soils_panel: El = col()
         .key("soils-panel")
         .w_full()
@@ -690,6 +788,7 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         .gap(8.0)
         .radius(kit.radius.md)
         .fill(kit.c.bg_base)
+        .scroll(ScrollSpec { stick_bottom: false })
         .child(
             text("Granulometría por tamices")
                 .font(kit.ty.small)
@@ -740,7 +839,96 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 .padding(4.0)
         }))
         .children(soils_error)
-        .children(soils_result);
+        .children(soils_result)
+        .child(el().w_full().h(1.0).fill(kit.c.layer_02))
+        .child(
+            text("Límites de Atterberg")
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text("Humedad frente al logaritmo de los golpes; el límite es el valor a 25 golpes.")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint),
+        )
+        .children(limit_rows)
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(action("add-limit-row", "Añadir determinación", |s: &mut AppState| {
+                    s.limits_add_row()
+                }))
+                .child(action(
+                    "calculate-limits",
+                    "Calcular límites",
+                    |s: &mut AppState| s.limits_calculate(),
+                )),
+        )
+        .children(state.limits.error.as_ref().map(|message| {
+            text(format!("⚠ {message}"))
+                .key("limits-error")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_base)
+                .padding(4.0)
+        }))
+        .children(limits_result)
+        .child(el().w_full().h(1.0).fill(kit.c.layer_02))
+        .child(
+            text("Densidad en sitio")
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text("Densidad húmeda medida en campo y humedad; la densidad máxima de laboratorio es obligatoria.")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Densidad húmeda (g/cm³)",
+                    "2.12",
+                    &state.density.wet,
+                    |s: &mut AppState| &mut s.density.wet,
+                ))
+                .child(field(
+                    "Humedad (%)",
+                    "10.0",
+                    &state.density.moisture,
+                    |s: &mut AppState| &mut s.density.moisture,
+                ))
+                .child(field(
+                    "Densidad máxima (g/cm³)",
+                    "1.95",
+                    &state.density.max_dry,
+                    |s: &mut AppState| &mut s.density.max_dry,
+                ))
+                .child(field(
+                    "Humedad óptima (%)",
+                    "11.0",
+                    &state.density.optimum,
+                    |s: &mut AppState| &mut s.density.optimum,
+                )),
+        )
+        .child(
+            row().w_full().gap(8.0).center_y().child(action(
+                "calculate-density",
+                "Calcular densidad",
+                |s: &mut AppState| s.density_calculate(),
+            )),
+        )
+        .children(state.density.error.as_ref().map(|message| {
+            text(format!("⚠ {message}"))
+                .key("density-error")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_base)
+                .padding(4.0)
+        }))
+        .children(density_result);
 
     // ------------------------------------------------ herramientas de la muestra
     let export_button = |key: &'static str, label: &'static str, format: ExportFormat| {

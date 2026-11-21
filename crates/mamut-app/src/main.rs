@@ -31,6 +31,15 @@ fn main() {
                 s.test_form.load.text = "500".to_owned();
                 s.calculate_test();
             }),
+            ("suelos", |s: &mut AppState| {
+                s.select(mamut_app::Nav::Soils);
+                s.soils.sample.text = "S-2026-0001".to_owned();
+                s.soils.total.text = "1000".to_owned();
+                for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+                    s.soils.rows[index].retained.text = (*value).to_owned();
+                }
+                s.soils_calculate();
+            }),
         ],
         ..AppSpec::new("MAMUT Lab", (1200.0, 800.0), startup, mamut_app::view)
     });

@@ -9,7 +9,8 @@
 use std::cell::Cell;
 
 use mamut_calculations::{
-    CylinderCompressionInput, ENGINE_VERSION, RoundingPolicy, SievePass, calculate, sieve_analysis,
+    CylinderCompressionInput, ENGINE_VERSION, RoundingPolicy, SievePass, calculate, field_density,
+    liquid_limit_multi_point, plastic_limit, plasticity_index, sieve_analysis,
 };
 use mamut_core::{Actor, CivilDate, Clock, Force, Length, Mass, SystemClock, Timestamp};
 use mamut_domain::{Material, Measurement, ResultRef, Sample, SampleCode, Specimen, TestRecord};
@@ -215,6 +216,99 @@ impl Default for SoilsForm {
     }
 }
 
+/// Una determinación del límite líquido en el formulario.
+pub struct LimitRow {
+    pub blows: TextEdit,
+    pub moisture: TextEdit,
+}
+
+/// Resultado de límites de Atterberg.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LimitsOutcome {
+    pub liquid_limit: f64,
+    pub slope: f64,
+    pub r_squared: f64,
+    pub determinations: usize,
+    pub blows_outside_range: bool,
+    pub plastic_limit: Option<f64>,
+    pub plasticity_index: Option<f64>,
+}
+
+/// Formulario de límites de Atterberg.
+pub struct LimitsForm {
+    pub rows: Vec<LimitRow>,
+    pub water: TextEdit,
+    pub dry: TextEdit,
+    pub tare: TextEdit,
+    pub error: Option<String>,
+    pub outcome: Option<LimitsOutcome>,
+}
+
+impl LimitsForm {
+    pub fn empty() -> Self {
+        let mut form = Self {
+            rows: Vec::new(),
+            water: TextEdit::new(""),
+            dry: TextEdit::new(""),
+            tare: TextEdit::new(""),
+            error: None,
+            outcome: None,
+        };
+        // Tres determinaciones: el mínimo que exige el ajuste.
+        for _ in 0..3 {
+            form.rows.push(LimitRow {
+                blows: TextEdit::new(""),
+                moisture: TextEdit::new(""),
+            });
+        }
+        form
+    }
+}
+
+impl Default for LimitsForm {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+/// Resultado de una determinación de densidad en sitio.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DensityOutcome {
+    pub dry_density: f64,
+    pub relative_compaction: f64,
+    pub moisture_deviation: f64,
+    pub warnings: Vec<&'static str>,
+}
+
+/// Formulario de densidad en sitio.
+pub struct DensityForm {
+    pub wet: TextEdit,
+    pub moisture: TextEdit,
+    pub max_dry: TextEdit,
+    pub optimum: TextEdit,
+    pub error: Option<String>,
+    pub outcome: Option<DensityOutcome>,
+}
+
+impl DensityForm {
+    pub fn empty() -> Self {
+        Self {
+            wet: TextEdit::new(""),
+            moisture: TextEdit::new(""),
+            max_dry: TextEdit::new(""),
+            optimum: TextEdit::new(""),
+            error: None,
+            outcome: None,
+        }
+    }
+}
+
+impl Default for DensityForm {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 /// Borrador del ensayo de compresión de cilindros.
 pub struct TestForm {
     pub sample_code: TextEdit,
@@ -320,6 +414,10 @@ pub struct AppState {
     pub test_form: TestForm,
     /// Formulario de granulometría.
     pub soils: SoilsForm,
+    /// Formulario de límites de Atterberg.
+    pub limits: LimitsForm,
+    /// Formulario de densidad en sitio.
+    pub density: DensityForm,
     /// Historial del ensayo para la muestra escrita en el formulario.
     pub test_history: Vec<TestRow>,
     /// Descriptor del ensayo, tomado del paquete normativo al arrancar.
@@ -362,6 +460,8 @@ impl AppState {
             form_open: false,
             test_form: TestForm::empty(),
             soils: SoilsForm::empty(),
+            limits: LimitsForm::empty(),
+            density: DensityForm::empty(),
             test_history: Vec::new(),
             descriptor: None,
             tool_code: TextEdit::new(""),
@@ -1112,6 +1212,145 @@ impl AppState {
                 self.flash = Some(format!("Informe de granulometría: {}", path.display()));
             }
             Err(message) => self.soils.error = Some(message),
+        }
+    }
+
+    /// Añade una determinación al límite líquido.
+    pub fn limits_add_row(&mut self) {
+        self.limits.rows.push(LimitRow {
+            blows: TextEdit::new(""),
+            moisture: TextEdit::new(""),
+        });
+    }
+
+    /// Calcula límite líquido, límite plástico e índice de plasticidad.
+    ///
+    /// El límite plástico es opcional: sin sus tres masas se informa solo el líquido. Con
+    /// las tres, se calcula también el índice.
+    pub fn limits_calculate(&mut self) {
+        self.limits.error = None;
+        self.limits.outcome = None;
+
+        let parsed = (|| -> std::result::Result<(f64, f64, f64, usize, bool), String> {
+            let mut points = Vec::new();
+            for (index, row) in self.limits.rows.iter().enumerate() {
+                let blows = row.blows.text.trim();
+                let moisture = row.moisture.text.trim();
+                if blows.is_empty() && moisture.is_empty() {
+                    continue;
+                }
+                if blows.is_empty() || moisture.is_empty() {
+                    return Err(format!(
+                        "la determinación {} está a medias: indica golpes y humedad",
+                        index + 1
+                    ));
+                }
+                let blows_value = parse_number(blows, "golpes")?;
+                if blows_value <= 0.0 || blows_value.fract() != 0.0 {
+                    return Err(format!(
+                        "los golpes deben ser un entero positivo (fila {})",
+                        index + 1
+                    ));
+                }
+                points.push(mamut_calculations::LimitPoint {
+                    blows: blows_value as u32,
+                    moisture_percent: parse_number(moisture, "humedad")?,
+                });
+            }
+            if points.is_empty() {
+                return Err("no hay ninguna determinación de límite líquido".to_owned());
+            }
+            let fit = liquid_limit_multi_point(&points).map_err(|error| error.to_string())?;
+            Ok((
+                fit.value,
+                fit.slope,
+                fit.r_squared,
+                fit.determinations,
+                fit.has_blows_outside_range,
+            ))
+        })();
+
+        let (liquid_limit, slope, r_squared, determinations, blows_outside_range) = match parsed {
+            Ok(values) => values,
+            Err(message) => {
+                self.limits.error = Some(message);
+                return;
+            }
+        };
+
+        // Límite plástico: opcional, pero si se empieza hay que terminarlo.
+        let water = self.limits.water.text.trim();
+        let dry = self.limits.dry.text.trim();
+        let tare = self.limits.tare.text.trim();
+        let filled = [water, dry, tare]
+            .iter()
+            .filter(|text| !text.is_empty())
+            .count();
+
+        let (plastic, index) = if filled == 0 {
+            (None, None)
+        } else if filled < 3 {
+            self.limits.error = Some(
+                "para el límite plástico hacen falta las tres masas: agua, seca y tara".into(),
+            );
+            return;
+        } else {
+            let plastic = match (|| -> std::result::Result<f64, String> {
+                let water = parse_number(water, "masa de agua")?;
+                let dry = parse_number(dry, "masa seca")?;
+                let tare = parse_number(tare, "tara")?;
+                plastic_limit(water, dry, tare).map_err(|error| error.to_string())
+            })() {
+                Ok(value) => value,
+                Err(message) => {
+                    self.limits.error = Some(message);
+                    return;
+                }
+            };
+            let index = match plasticity_index(liquid_limit, plastic) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.limits.error = Some(error.to_string());
+                    return;
+                }
+            };
+            (Some(plastic), Some(index))
+        };
+
+        self.limits.outcome = Some(LimitsOutcome {
+            liquid_limit,
+            slope,
+            r_squared,
+            determinations,
+            blows_outside_range,
+            plastic_limit: plastic,
+            plasticity_index: index,
+        });
+    }
+
+    /// Calcula la densidad seca en sitio y el grado de compactación.
+    pub fn density_calculate(&mut self) {
+        self.density.error = None;
+        self.density.outcome = None;
+
+        let parsed = (|| -> std::result::Result<mamut_calculations::FieldDensity, String> {
+            let wet = parse_number(&self.density.wet.text, "densidad húmeda")?;
+            let moisture = parse_number(&self.density.moisture.text, "humedad")?;
+            let max_dry = parse_number(&self.density.max_dry.text, "densidad seca máxima")?;
+            let optimum = parse_number(&self.density.optimum.text, "humedad óptima")?;
+            field_density(wet, moisture, max_dry, optimum).map_err(|error| error.to_string())
+        })();
+
+        match parsed {
+            Ok(result) => {
+                self.density.outcome = Some(DensityOutcome {
+                    dry_density: result.dry_density_g_cm3,
+                    relative_compaction: result.relative_compaction_percent,
+                    moisture_deviation: result.moisture_deviation_points,
+                    warnings: result.warnings,
+                });
+            }
+            Err(message) => self.density.error = Some(message),
         }
     }
 

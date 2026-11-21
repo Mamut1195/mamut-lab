@@ -642,6 +642,137 @@ fn se_puede_añadir_un_tamiz_mas() {
 }
 
 #[test]
+fn los_limites_de_atterberg_se_calculan() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    // Tres determinaciones coherentes: más golpes, menos humedad.
+    for (index, (blows, moisture)) in [("20", "45"), ("30", "41"), ("40", "38")]
+        .iter()
+        .enumerate()
+    {
+        rt.state.limits.rows[index].blows.text = (*blows).to_owned();
+        rt.state.limits.rows[index].moisture.text = (*moisture).to_owned();
+    }
+    // Límite plástico: agua 5 g, seca 25 g, tara 5 g → 25 %.
+    rt.state.limits.water.text = "5".to_owned();
+    rt.state.limits.dry.text = "25".to_owned();
+    rt.state.limits.tare.text = "5".to_owned();
+
+    rt.state.limits_calculate();
+
+    assert!(
+        rt.state.limits.error.is_none(),
+        "no debía fallar: {:?}",
+        rt.state.limits.error
+    );
+    let outcome = rt.state.limits.outcome.clone().expect("resultado");
+    assert!((41.0..45.0).contains(&outcome.liquid_limit));
+    assert_eq!(outcome.determinations, 3);
+    assert!(outcome.slope < 0.0);
+    let plastic = outcome.plastic_limit.expect("límite plástico");
+    assert!((plastic - 25.0).abs() < 1e-9);
+    let index = outcome.plasticity_index.expect("índice");
+    assert!((index - (outcome.liquid_limit - 25.0)).abs() < 1e-9);
+}
+
+#[test]
+fn con_una_sola_determinacion_no_hay_limite_liquido() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.limits.rows[0].blows.text = "25".to_owned();
+    rt.state.limits.rows[0].moisture.text = "40".to_owned();
+
+    rt.state.limits_calculate();
+
+    assert!(rt.state.limits.outcome.is_none());
+    assert!(
+        rt.state
+            .limits
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("tres"),
+        "{:?}",
+        rt.state.limits.error
+    );
+}
+
+#[test]
+fn el_limite_plastico_a_medias_es_un_error() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    for (index, (blows, moisture)) in [("20", "45"), ("30", "41"), ("40", "38")]
+        .iter()
+        .enumerate()
+    {
+        rt.state.limits.rows[index].blows.text = (*blows).to_owned();
+        rt.state.limits.rows[index].moisture.text = (*moisture).to_owned();
+    }
+    rt.state.limits.water.text = "5".to_owned();
+    // Falta la masa seca y la tara.
+
+    rt.state.limits_calculate();
+
+    assert!(rt.state.limits.outcome.is_none());
+    assert!(
+        rt.state
+            .limits
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("tres masas"),
+        "{:?}",
+        rt.state.limits.error
+    );
+}
+
+#[test]
+fn la_densidad_en_sitio_se_calcula_y_avisa() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    // 2,145 g/cm³ húmeda al 10 % → 1,950 g/cm³ seca, que es exactamente la máxima.
+    rt.state.density.wet.text = "2.145".to_owned();
+    rt.state.density.moisture.text = "10".to_owned();
+    rt.state.density.max_dry.text = "1.95".to_owned();
+    rt.state.density.optimum.text = "10".to_owned();
+
+    rt.state.density_calculate();
+
+    assert!(
+        rt.state.density.error.is_none(),
+        "{:?}",
+        rt.state.density.error
+    );
+    let outcome = rt.state.density.outcome.clone().expect("resultado");
+    assert!((outcome.relative_compaction - 100.0).abs() < 1e-6);
+    assert!(outcome.warnings.is_empty());
+
+    // Una densidad húmeda imposible: 117 % de compactación, con aviso.
+    rt.state.density.wet.text = "2.40".to_owned();
+    rt.state.density.moisture.text = "5".to_owned();
+    rt.state.density_calculate();
+    let outcome = rt.state.density.outcome.clone().expect("resultado");
+    assert!(outcome.relative_compaction > 100.0);
+    assert!(!outcome.warnings.is_empty());
+}
+
+#[test]
+fn sin_densidad_maxima_no_hay_compactacion() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.density.wet.text = "2.10".to_owned();
+    rt.state.density.moisture.text = "10".to_owned();
+    rt.state.density.optimum.text = "11".to_owned();
+
+    rt.state.density_calculate();
+
+    assert!(rt.state.density.outcome.is_none());
+    assert!(rt.state.density.error.is_some());
+}
+
+#[test]
 fn el_informe_granulometrico_se_genera_desde_la_interfaz() {
     let mut rt = runtime_with_store();
     press(&mut rt, "nav-3");

@@ -71,8 +71,11 @@ densidad seca con la humedad y el vértice de la curva.
 | Pieza | Estado |
 | --- | --- |
 | Clasificación **SUCS** (D2487) y **AASHTO** (D3282) | **Bloqueada**: dos fuentes públicas se contradicen en valores concretos. Requiere la norma |
-| **CBR** | Hecho |
-| **Densidad de campo** | Hecho (gauge nuclear; el cono de arena quedó fuera de Tex-115) |
+| **CBR** | Cálculo hecho; falta la pantalla |
+| **Densidad de campo** | Cálculo y pantalla hechos (gauge nuclear; el cono de arena quedó fuera de Tex-115) |
+| **Granulometría** | Cálculo, pantalla e informe PDF hechos |
+| **Límites de Atterberg** | Cálculo y pantalla hechos; falta la sección de informe |
+| **Compactación** | Cálculo hecho; faltan pantalla e informe |
 | Interfaz de los ensayos de suelos | Pendiente: el cálculo existe; falta el espacio de trabajo como el de compresión |
 | Sección de suelos en el informe PDF | Pendiente |
 | Gráfico granulométrico semilogarítmico | La geometría existe (`Scale::Log10`); falta montarlo |
