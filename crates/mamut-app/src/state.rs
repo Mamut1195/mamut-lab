@@ -580,6 +580,12 @@ pub struct AppState {
     pub series: Vec<(u32, f64)>,
     /// Muestra cuya anulación está a la espera de confirmación.
     pub pending_void: Option<String>,
+    /// Código de la muestra cuyos informes se consultan.
+    pub reports_code: TextEdit,
+    /// Informes emitidos de esa muestra, ya formateados.
+    pub reports_list: Vec<String>,
+    /// Error al consultar los informes.
+    pub reports_error: Option<String>,
     /// Mensaje efímero tras una acción correcta.
     pub flash: Option<String>,
 }
@@ -620,6 +626,9 @@ impl AppState {
             attachments: Vec::new(),
             series: Vec::new(),
             pending_void: None,
+            reports_code: TextEdit::new(String::new()),
+            reports_list: Vec::new(),
+            reports_error: None,
             flash: None,
         }
     }
@@ -2332,6 +2341,43 @@ impl AppState {
                 "los datos cambiaron desde el cálculo: vuelve a calcular antes de guardar o emitir"
                     .to_owned(),
             ),
+        }
+    }
+
+    /// Carga los informes emitidos de la muestra indicada.
+    pub fn load_reports(&mut self) {
+        self.reports_error = None;
+        self.reports_list.clear();
+
+        let code = self.reports_code.text.trim().to_owned();
+        if code.is_empty() {
+            self.reports_error = Some("indica la muestra cuyos informes quieres ver".to_owned());
+            return;
+        }
+        let Some(store) = &self.store else {
+            self.reports_error = Some("no hay almacenamiento disponible".to_owned());
+            return;
+        };
+        match store.reports_for(&code) {
+            Ok(reports) => {
+                self.reports_list = reports
+                    .iter()
+                    .map(|report| {
+                        format!(
+                            "{} · {} · {} · {}",
+                            report.kind,
+                            report.issued_at,
+                            &report.sha256[..12],
+                            report.path
+                        )
+                    })
+                    .collect();
+                if self.reports_list.is_empty() {
+                    self.reports_error =
+                        Some(format!("la muestra «{code}» no tiene informes emitidos"));
+                }
+            }
+            Err(error) => self.reports_error = Some(error),
         }
     }
 

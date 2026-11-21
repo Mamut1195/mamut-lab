@@ -1296,12 +1296,66 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         .child(tools_panel);
 
     // El área de trabajo muestra el formulario, el ensayo o las muestras.
+    // ---------------------------------------------------------------- informes
+    let reports_panel: El = col()
+        .key("reports-panel")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .padding(12.0)
+        .gap(8.0)
+        .radius(kit.radius.md)
+        .fill(kit.c.bg_base)
+        .child(
+            text("Informes emitidos")
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text("Lista los PDF registrados de una muestra, con su fecha y su huella.")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(field(
+                    "Muestra",
+                    "H-2026-0001",
+                    &state.reports_code,
+                    |s: &mut AppState| &mut s.reports_code,
+                ))
+                .child(action(
+                    "load-reports",
+                    "Ver informes",
+                    |s: &mut AppState| s.load_reports(),
+                )),
+        )
+        .children(state.reports_error.as_ref().map(|message| {
+            text(format!("⚠ {message}"))
+                .key("reports-error")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_base)
+                .padding(4.0)
+        }))
+        .child(col().key("reports-list").w_full().gap(2.0).children(
+            state.reports_list.iter().map(|report| {
+                text(report.clone())
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_faint)
+            }),
+        ));
+
     let body: El = if state.form_open {
         form_panel
     } else if state.nav == Nav::Concrete {
         test_panel
     } else if state.nav == Nav::Soils {
         soils_panel
+    } else if state.nav == Nav::Reports {
+        reports_panel
     } else {
         samples_body
     };

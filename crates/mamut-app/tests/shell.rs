@@ -1348,3 +1348,50 @@ fn el_informe_de_compresion_registra_el_ensayo_y_lo_marca_informado() {
         "el ensayo pasa a informado"
     );
 }
+
+#[test]
+fn la_seccion_de_informes_lista_los_emitidos() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0060");
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0060");
+    press(&mut rt, "calculate-test");
+    press(&mut rt, "save-test");
+    press(&mut rt, "report-pdf");
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "el informe debía emitirse: {:?}",
+        rt.state.test_form.error
+    );
+
+    press(&mut rt, "nav-5");
+    rt.state.reports_code.text = "H-2026-0060".to_owned();
+    press(&mut rt, "load-reports");
+
+    assert_eq!(
+        rt.state.reports_list.len(),
+        1,
+        "un informe emitido: {:?}",
+        rt.state.reports_error
+    );
+    assert!(rt.presented("reports-list").is_some());
+    assert!(rt.state.reports_list[0].contains("compresion"));
+}
+
+#[test]
+fn sin_muestra_la_seccion_de_informes_avisa() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-5");
+    press(&mut rt, "load-reports");
+
+    assert!(rt.state.reports_list.is_empty());
+    assert!(
+        rt.state
+            .reports_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("muestra"),
+        "{:?}",
+        rt.state.reports_error
+    );
+}
