@@ -165,6 +165,10 @@ pub struct SieveRow {
 pub struct SoilsOutcome {
     pub total_g: f64,
     pub sieves: Vec<SievePass>,
+    /// Cuántos tamices sostienen la curva.
+    pub sieve_count: usize,
+    /// Algún diámetro cayó en un extremo de la curva: el dato existe pero es un borde.
+    pub d_at_boundary: bool,
     pub passing: Vec<(f64, f64)>,
     pub d10: Option<f64>,
     pub d30: Option<f64>,
@@ -1026,6 +1030,8 @@ impl AppState {
                 self.soils.outcome = Some(SoilsOutcome {
                     total_g: total,
                     sieves: sorted,
+                    sieve_count: outcome.sieve_count,
+                    d_at_boundary: outcome.d_at_boundary,
                     passing: outcome.passing,
                     d10: outcome.d10,
                     d30: outcome.d30,

@@ -124,4 +124,15 @@ mod tests {
             "pero el valor real está por debajo del mínimo: comparar el redondeado daría un falso conforme"
         );
     }
+
+    #[test]
+    fn el_artefacto_binario_esta_documentado() {
+        // 1,005 y 0,145 no son exactos en binario: valen 1,00499999… y 0,14499999…, así que
+        // el redondeo "hacia afuera" no los sube. Se documenta el comportamiento real en vez
+        // de prometer un decimal exacto que la representación no permite.
+        assert_eq!(round_half_away_from_zero(1.005, 2), 1.0);
+        assert_eq!(round_half_away_from_zero(0.145, 2), 0.14);
+        // Los casos que sí son exactos se redondean como se espera.
+        assert_eq!(round_half_away_from_zero(2.345, 2), 2.35);
+    }
 }

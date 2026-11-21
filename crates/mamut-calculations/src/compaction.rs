@@ -147,7 +147,9 @@ pub fn curve_peak(points: &[CompactionPoint]) -> Option<CurvePeak> {
         return None;
     }
     // El máximo no puede superar lo medido mas de un 1 %, ni quedarse por debajo.
-    if vertex_y > y_max * 1.01 || vertex_y < y_max * 0.99 {
+    // Solo se acota por arriba: un vertice por debajo del maximo medido es lo normal cuando
+    // hay dispersion entre puntos. Acotarlo por abajo dejaba sin resultado curvas validas.
+    if vertex_y > y_max * 1.01 {
         return None;
     }
 
@@ -200,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn el_maximo_de_la_curva_sale_de_los_tres_puntos_que_lo_rodean() {
+    fn el_maximo_de_la_curva_con_tres_puntos() {
         // Parábola con vértice en 10,33 % y 1,952 g/cm³.
         let peak = curve_peak(&[
             CompactionPoint {
@@ -370,5 +372,36 @@ mod tests {
             ])
             .is_none()
         );
+    }
+
+    #[test]
+    fn una_curva_con_dispersion_normal_si_produce_maximo() {
+        // Cinco puntos con un pico que sobresale un 1,2 % de la parábola: es dispersión
+        // normal de laboratorio, no un dato malo. Rechazarla dejaba el ensayo sin resultado.
+        let peak = curve_peak(&[
+            CompactionPoint {
+                moisture_percent: 8.0,
+                dry_density_g_cm3: 1.87,
+            },
+            CompactionPoint {
+                moisture_percent: 10.0,
+                dry_density_g_cm3: 1.96,
+            },
+            CompactionPoint {
+                moisture_percent: 12.0,
+                dry_density_g_cm3: 1.92,
+            },
+            CompactionPoint {
+                moisture_percent: 14.0,
+                dry_density_g_cm3: 1.90,
+            },
+            CompactionPoint {
+                moisture_percent: 16.0,
+                dry_density_g_cm3: 1.87,
+            },
+        ])
+        .expect("una curva normal debe dar maximo");
+        assert!(peak.max_dry_density_g_cm3 < 1.96 * 1.01);
+        assert_eq!(peak.points_used, 5);
     }
 }

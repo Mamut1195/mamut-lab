@@ -655,6 +655,19 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 .font(kit.ty.text_xsmall)
                 .color(kit.c.text_muted),
         );
+        column = column.child(
+            text(format!(
+                "{} tamices · {}",
+                outcome.sieve_count,
+                if outcome.d_at_boundary {
+                    "algún diámetro cae en el borde de la curva: no hay intervalo de interpolación"
+                } else {
+                    "diámetros interpolados entre tamices"
+                }
+            ))
+            .font(kit.ty.text_xsmall)
+            .color(kit.c.text_faint),
+        );
         let lines: Vec<El> = outcome
             .passing
             .iter()

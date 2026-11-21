@@ -76,11 +76,47 @@ Devolvía solo un número. `cbr_percent` era pública y aceptaba cargas sin corr
 - **El fallo más caro no era aritmético, era de contrato:** un número que no dice qué
   significa ni con qué se corrigió acaba en un informe sin que nadie pueda auditarlo.
 
+## Segunda ronda: verificación de las correcciones
+
+El mismo revisor volvió a auditar el estado corregido. **APROBADO CON RESERVAS**, con dos
+fallos nuevos que su propio criterio señaló — y tenía razón en los dos:
+
+### N1 · El umbral inferior del 1 % rechazaba curvas válidas
+
+Al acotar el vértice por abajo (`< y_max·0,99`) para evitar máximos inventados, se pasó de
+largo: con cuatro o más puntos, un pico que sobresale un 1 % de la parábola es **dispersión
+normal de laboratorio**, no un dato malo. Una curva de Proctor normal devolvía `None`.
+
+- **Corregido:** se acota solo por arriba, que es lo que impedía inventar densidad.
+- **Prueba añadida:** cinco puntos con un pico del 1,2 % deben dar máximo.
+
+### N2 · Una corrección rechazada se presentaba como «no hacía falta corregir»
+
+`cbr_from_curve` hacía `unwrap_or(0.0)` sobre el corrimiento. Pero `None` significaba dos
+cosas distintas: *la curva no necesita corrección* y *la corrección calculada no tiene
+sentido*. En el segundo caso el CBR se calculaba **sin corregir** y se informaba con
+corrimiento 0,0, como si la curva fuera convexa.
+
+- **Corregido:** `tangent_origin_offset` devuelve `Result<Option<f64>>`; el caso imposible es
+  un error que detiene el ensayo.
+- **Prueba añadida:** curva que se empina tarde → error, no CBR silencioso.
+
+### Menores de la segunda ronda
+
+| # | Corrección |
+| --- | --- |
+| N3 | Cota muerta eliminada del corrimiento (quedaba un `||` que nunca decidía) |
+| N4 | Docstrings obsoletos: «tres puntos», «6,9 y 10,3 MPa» con constantes nuevas |
+| N5 | Porcentaje que pasa acotado a cero (un informe no puede decir «pasa −0,2 %») |
+| N6 | `sieve_count` y `d_at_boundary` llegan a la pantalla; antes eran inertes |
+| N7 | El artefacto binario del redondeo (`1,005 → 1,00`) queda documentado con prueba |
+| N8 | Se documenta que la plausibilidad del CBR se valida en las dos penetraciones |
+
 ## Estado tras las correcciones
 
 ```
 cargo clippy -D warnings → 0
-cargo test --workspace   → 375 pruebas, 0 fallos
+cargo test --workspace   → 377 pruebas, 0 fallos
 ```
 
 Pendiente de decisión, no de trabajo: la meseta en la interpolación (se devuelve el diámetro

@@ -105,7 +105,9 @@ pub fn sieve_analysis(total_dry_g: f64, sieves: &[SievePass]) -> Result<Granulom
         running += sieve.retained_g;
         let cumulative = 100.0 * running / total_dry_g;
         cumulative_retained.push((sieve.size_mm, cumulative));
-        passing.push((sieve.size_mm, 100.0 - cumulative));
+        // Un exceso de pesada dentro de la tolerancia puede dejar el complemento en negativo.
+        // Se acota a cero: un porcentaje que pasa negativo no existe.
+        passing.push((sieve.size_mm, (100.0 - cumulative).max(0.0)));
     }
 
     let d10 = size_at_percent(&passing, 10.0);
@@ -354,8 +356,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome.sieve_count, 2);
-        // El porcentaje que pasa puede salir ligeramente negativo: se informa tal cual.
-        assert!(outcome.passing[1].1 < 0.0);
+        // El complemento se acota a cero: no hay porcentajes que pasen negativos.
+        assert_eq!(outcome.passing[1].1, 0.0);
     }
 
     #[test]

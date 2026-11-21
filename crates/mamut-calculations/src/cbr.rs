@@ -2,7 +2,7 @@
 //!
 //! **Referencia pública:** Ohio DOT, *Procedure Checklist T-193 (ASTM D1883)*, mayo 2024 —
 //! confirma que el CBR se obtiene dividiendo la carga unitaria corregida a 2,54 mm y 5,08 mm
-//! entre las cargas estándar de **6,9 y 10,3 MPa (1000 y 1500 psi)** y multiplicando por 100.
+//! entre las cargas estándar de **1000 y 1500 psi** (6,894757 y 10,342136 MPa) y multiplicando por 100.
 //! La corrección de la curva inicial está descrita en FDOT `FM 5-515` §7.1.
 //! Análisis en `docs/normas/referencias-publicas/cbr-lbr.md`.
 //!
@@ -99,9 +99,9 @@ pub fn cbr_percent(load_01_mpa: f64, load_02_mpa: f64) -> Result<CbrResult> {
 /// Devuelve `None` cuando la curva ya es convexa desde el origen o cuando el corrimiento
 /// resultante no tiene sentido físico (mayor que 1 mm o que el 20 % de la penetración de
 /// referencia): en ese caso lo que está mal es la curva, no el origen.
-pub fn tangent_origin_offset(points: &[PenetrationPoint]) -> Option<f64> {
+pub fn tangent_origin_offset(points: &[PenetrationPoint]) -> Result<Option<f64>> {
     if points.len() < 3 {
-        return None;
+        return Ok(None);
     }
     let mut ordered = points.to_vec();
     ordered.sort_by(|a, b| a.penetration_mm.total_cmp(&b.penetration_mm));
@@ -120,7 +120,7 @@ pub fn tangent_origin_offset(points: &[PenetrationPoint]) -> Option<f64> {
     }
     let (slope, index) = best;
     if slope <= 0.0 || !slope.is_finite() {
-        return None;
+        return Ok(None);
     }
 
     let x1 = ordered[index + 1].penetration_mm;
@@ -129,13 +129,16 @@ pub fn tangent_origin_offset(points: &[PenetrationPoint]) -> Option<f64> {
     let crossing = -intercept / slope;
 
     if !crossing.is_finite() || crossing <= 0.0 {
-        return None;
+        return Ok(None);
     }
-    // Cota de sentido físico.
-    if crossing > 1.0 || crossing > 0.2 * 5.08 {
-        return None;
+    // Cota de sentido fisico: un corrimiento de mas de 1 mm no describe un asiento de placa.
+    if crossing > 1.0 {
+        return Err(CalcError::Incoherent(format!(
+            "la correccion de origen calculada ({crossing:.2} mm) no tiene sentido fisico: \
+             revisa la forma de la curva"
+        )));
     }
-    Some(crossing)
+    Ok(Some(crossing))
 }
 
 /// Carga unitaria interpolada a una penetración dada.
@@ -167,7 +170,7 @@ pub fn cbr_from_curve(points: &[PenetrationPoint]) -> Result<CbrResult> {
     let mut ordered = points.to_vec();
     ordered.sort_by(|a, b| a.penetration_mm.total_cmp(&b.penetration_mm));
 
-    let offset = tangent_origin_offset(&ordered).unwrap_or(0.0);
+    let offset = tangent_origin_offset(&ordered)?.unwrap_or(0.0);
 
     let first = load_at(&ordered, 2.54 + offset).ok_or_else(|| {
         CalcError::Incoherent(format!(
@@ -246,7 +249,7 @@ mod tests {
                 load_mpa: 5.171_1,
             },
         ];
-        assert!(tangent_origin_offset(&points).is_none());
+        assert!(tangent_origin_offset(&points).unwrap().is_none());
         let result = cbr_from_curve(&points).unwrap();
         assert!(close(result.percent, 50.0, 0.01));
         assert_eq!(result.offset_mm, 0.0);
@@ -282,7 +285,9 @@ mod tests {
                 load_mpa: 1.35,
             },
         ];
-        let offset = tangent_origin_offset(&points).expect("hay corrección");
+        let offset = tangent_origin_offset(&points)
+            .unwrap()
+            .expect("hay corrección");
         assert!(offset > 0.0);
         assert!(offset <= 1.0, "el corrimiento está acotado: {offset}");
 
@@ -321,7 +326,13 @@ mod tests {
                 load_mpa: 4.50,
             },
         ];
-        assert!(tangent_origin_offset(&points).is_none());
+        assert!(
+            tangent_origin_offset(&points).is_err(),
+            "un corrimiento de varios milímetros no se aplica en silencio: se rechaza"
+        );
+
+        // Y el ensayo no puede seguir como si no hubiera hecho falta corregir.
+        assert!(cbr_from_curve(&points).is_err());
     }
 
     #[test]
