@@ -1594,6 +1594,241 @@ impl AppState {
         self.compaction.error = None;
     }
 
+    /// Compone y guarda el informe de un ensayo de suelos.
+    ///
+    /// Reutiliza la maqueta del informe de compresión: la estructura (identificación, datos
+    /// originales, cálculos, resultado) es la misma para todos los ensayos, y tener un solo
+    /// renderizador evita que un ensayo se imprima distinto que otro.
+    fn emit_soils_report(
+        &mut self,
+        file_stem: &str,
+        test_name: &str,
+        norm: (&str, u16, &str),
+        measurements: Vec<ReportLine>,
+        calculations: Vec<ReportLine>,
+        result: ReportLine,
+    ) -> std::result::Result<String, String> {
+        let code = self.soils.sample.text.trim().to_owned();
+        if code.is_empty() {
+            return Err("indica la muestra a la que corresponde el informe".to_owned());
+        }
+        let Some(store) = &self.store else {
+            return Err("no hay almacenamiento disponible".to_owned());
+        };
+        let Some(laboratory) = LaboratoryInfo::new("MAMUT Lab") else {
+            return Err("identidad del laboratorio no configurada".to_owned());
+        };
+
+        let sample = store.find_sample(&code).ok().flatten();
+        let today = CivilDate::today(&SystemClock);
+        let norm_ref = NormRef::new(
+            NormBody::Astm,
+            norm.0,
+            norm.1,
+            norm.2,
+            NormStatus::PendingReview,
+        )
+        .map_err(|error| error.to_string())?;
+
+        let data = ReportData {
+            laboratory,
+            sample_code: code.clone(),
+            client: sample
+                .as_ref()
+                .map(|sample| sample.client.clone())
+                .unwrap_or_default(),
+            project: sample
+                .as_ref()
+                .map(|sample| sample.project.clone())
+                .unwrap_or_default(),
+            received_on: sample
+                .as_ref()
+                .map(|sample| sample.received_on)
+                .unwrap_or(today),
+            test_name: test_name.to_owned(),
+            method_label: "Normativo".to_owned(),
+            norm_citation: Some(norm_ref.citation()),
+            performed_on: today,
+            operator: sample
+                .as_ref()
+                .map(|sample| sample.responsible.name.clone())
+                .unwrap_or_default(),
+            equipment: None,
+            measurements,
+            calculations,
+            result,
+            // Sin especificación aplicable no hay veredicto: el informe lo dirá.
+            conformity: Conformity::evaluate(0.0, &norm_ref, None, None),
+            observations: String::new(),
+            issued_on: today,
+            responsible: sample
+                .as_ref()
+                .map(|sample| sample.responsible.name.clone())
+                .unwrap_or_default(),
+        };
+
+        let bytes = render_pdf(&data);
+        let path = store.save_pdf(&format!("{file_stem}-{code}"), &bytes)?;
+        Ok(path.display().to_string())
+    }
+
+    /// Emite el informe de límites de Atterberg.
+    pub fn report_atterberg(&mut self) {
+        let Some(outcome) = self.limits.outcome.clone() else {
+            self.limits.error = Some("calcula los límites antes de emitir el informe".into());
+            return;
+        };
+        let measurements = vec![
+            ReportLine::with_unit("Determinaciones", outcome.determinations.to_string(), ""),
+            ReportLine::with_unit("Pendiente del ajuste", format!("{:.3}", outcome.slope), ""),
+            ReportLine::with_unit(
+                "Coeficiente de determinación",
+                format!("{:.3}", outcome.r_squared),
+                "",
+            ),
+        ];
+        let mut calculations = Vec::new();
+        if let Some(plastic) = outcome.plastic_limit {
+            calculations.push(ReportLine::with_unit(
+                "Límite plástico",
+                format!("{plastic:.1}"),
+                "%",
+            ));
+        }
+        if let Some(index) = outcome.plasticity_index {
+            calculations.push(ReportLine::with_unit(
+                "Índice de plasticidad",
+                format!("{index:.1}"),
+                "",
+            ));
+        }
+        match self.emit_soils_report(
+            "atterberg",
+            "Límites de Atterberg",
+            ("D4318", 2024, "Límites líquido y plástico"),
+            measurements,
+            calculations,
+            ReportLine::with_unit(
+                "Límite líquido",
+                format!("{:.1}", outcome.liquid_limit),
+                "%",
+            ),
+        ) {
+            Ok(path) => self.flash = Some(format!("Informe de Atterberg: {path}")),
+            Err(message) => self.limits.error = Some(message),
+        }
+    }
+
+    /// Emite el informe de compactación.
+    pub fn report_compaction(&mut self) {
+        let Some(peak) = self.compaction.peak else {
+            self.compaction.error = Some("calcula el máximo antes de emitir el informe".into());
+            return;
+        };
+        let points: Vec<ReportLine> = self
+            .compaction
+            .points
+            .iter()
+            .map(|point| {
+                ReportLine::with_unit(
+                    format!("Punto a {:.1} %", point.moisture),
+                    format!("{:.3}", point.dry_density),
+                    "g/cm³",
+                )
+            })
+            .collect();
+        let calculations = vec![ReportLine::with_unit(
+            "Humedad óptima",
+            format!("{:.1}", peak.optimum_moisture),
+            "%",
+        )];
+        match self.emit_soils_report(
+            "compactacion",
+            "Compactación de laboratorio",
+            ("D698", 2024, "Ensayo de compactación"),
+            points,
+            calculations,
+            ReportLine::with_unit(
+                "Densidad seca máxima",
+                format!("{:.3}", peak.max_dry_density),
+                "g/cm³",
+            ),
+        ) {
+            Ok(path) => self.flash = Some(format!("Informe de compactación: {path}")),
+            Err(message) => self.compaction.error = Some(message),
+        }
+    }
+
+    /// Emite el informe de CBR.
+    pub fn report_cbr(&mut self) {
+        let Some(outcome) = self.cbr.outcome else {
+            self.cbr.error = Some("calcula el CBR antes de emitir el informe".into());
+            return;
+        };
+        let calculations = vec![
+            ReportLine::with_unit(
+                "Penetración que gobierna",
+                format!("{:.2}", outcome.governing_penetration),
+                "mm",
+            ),
+            ReportLine::with_unit(
+                "Corrimiento de origen",
+                format!("{:.2}", outcome.offset),
+                "mm",
+            ),
+        ];
+        match self.emit_soils_report(
+            "cbr",
+            "California Bearing Ratio",
+            ("D1883", 2024, "CBR de suelos compactados"),
+            Vec::new(),
+            calculations,
+            ReportLine::with_unit("CBR", format!("{:.1}", outcome.percent), "%"),
+        ) {
+            Ok(path) => self.flash = Some(format!("Informe de CBR: {path}")),
+            Err(message) => self.cbr.error = Some(message),
+        }
+    }
+
+    /// Emite el informe de densidad en sitio.
+    pub fn report_density(&mut self) {
+        let Some(outcome) = self.density.outcome.clone() else {
+            self.density.error = Some("calcula la densidad antes de emitir el informe".into());
+            return;
+        };
+        let measurements = vec![
+            ReportLine::with_unit("Densidad húmeda", self.density.wet.text.trim(), "g/cm³"),
+            ReportLine::with_unit("Humedad en sitio", self.density.moisture.text.trim(), "%"),
+        ];
+        let calculations = vec![
+            ReportLine::with_unit(
+                "Densidad seca",
+                format!("{:.3}", outcome.dry_density),
+                "g/cm³",
+            ),
+            ReportLine::with_unit(
+                "Desviación de humedad",
+                format!("{:+.1}", outcome.moisture_deviation),
+                "puntos",
+            ),
+        ];
+        match self.emit_soils_report(
+            "densidad",
+            "Densidad en sitio",
+            ("D6938", 2024, "Densidad y humedad en sitio"),
+            measurements,
+            calculations,
+            ReportLine::with_unit(
+                "Grado de compactación",
+                format!("{:.1}", outcome.relative_compaction),
+                "%",
+            ),
+        ) {
+            Ok(path) => self.flash = Some(format!("Informe de densidad: {path}")),
+            Err(message) => self.density.error = Some(message),
+        }
+    }
+
     /// Texto de la barra de estado.
     ///
     /// Es una función del estado y no de la vista, para poder probar que **dice lo que

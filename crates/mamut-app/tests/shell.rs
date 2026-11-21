@@ -906,6 +906,115 @@ fn un_cbr_sin_curva_suficiente_no_se_calcula() {
 }
 
 #[test]
+fn los_cuatro_informes_de_suelos_se_generan() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0001".to_owned();
+
+    // Atterberg
+    for (index, (blows, moisture)) in [("20", "45"), ("30", "41"), ("40", "38")]
+        .iter()
+        .enumerate()
+    {
+        rt.state.limits.rows[index].blows.text = (*blows).to_owned();
+        rt.state.limits.rows[index].moisture.text = (*moisture).to_owned();
+    }
+    rt.state.limits_calculate();
+    rt.state.report_atterberg();
+    assert!(
+        rt.state.limits.error.is_none(),
+        "{:?}",
+        rt.state.limits.error
+    );
+
+    // Densidad en sitio
+    rt.state.density.wet.text = "2.145".to_owned();
+    rt.state.density.moisture.text = "10".to_owned();
+    rt.state.density.max_dry.text = "1.95".to_owned();
+    rt.state.density.optimum.text = "10".to_owned();
+    rt.state.density_calculate();
+    rt.state.report_density();
+    assert!(
+        rt.state.density.error.is_none(),
+        "{:?}",
+        rt.state.density.error
+    );
+
+    // Compactación: tres puntos
+    rt.state.compaction.mold.text = "3000".to_owned();
+    rt.state.compaction.volume.text = "943".to_owned();
+    for (mold_plus, wet, dry) in [
+        ("4884.1", "216", "200"),
+        ("5022.7", "220", "200"),
+        ("5006.7", "224", "200"),
+    ] {
+        rt.state.compaction.mold_plus.text = mold_plus.to_owned();
+        rt.state.compaction.wet_sample.text = wet.to_owned();
+        rt.state.compaction.dry_sample.text = dry.to_owned();
+        rt.state.compaction_add_point();
+    }
+    rt.state.compaction_calculate();
+    rt.state.report_compaction();
+    assert!(
+        rt.state.compaction.error.is_none(),
+        "{:?}",
+        rt.state.compaction.error
+    );
+
+    // CBR
+    rt.state.cbr.rows[0].load.text = "0".to_owned();
+    rt.state.cbr.rows[3].load.text = "3.4474".to_owned();
+    rt.state.cbr.rows[4].load.text = "5.1711".to_owned();
+    rt.state.cbr_calculate();
+    rt.state.report_cbr();
+    assert!(rt.state.cbr.error.is_none(), "{:?}", rt.state.cbr.error);
+
+    let directory = rt
+        .state
+        .store
+        .as_ref()
+        .expect("almacén")
+        .data_dir()
+        .join("reports");
+    for stem in ["atterberg", "densidad", "compactacion", "cbr"] {
+        let path = directory.join(format!("{stem}-S-2026-0001.pdf"));
+        let bytes = std::fs::read(&path).unwrap_or_else(|_| panic!("falta el informe {stem}"));
+        assert!(bytes.starts_with(b"%PDF"), "{stem} no es un PDF");
+        assert!(bytes.len() > 2_000, "{stem} está vacío");
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn sin_muestra_no_se_emite_informe_de_suelos() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    for (index, (blows, moisture)) in [("20", "45"), ("30", "41"), ("40", "38")]
+        .iter()
+        .enumerate()
+    {
+        rt.state.limits.rows[index].blows.text = (*blows).to_owned();
+        rt.state.limits.rows[index].moisture.text = (*moisture).to_owned();
+    }
+    rt.state.limits_calculate();
+    // Sin código de muestra.
+    rt.state.report_atterberg();
+
+    assert!(rt.state.limits.error.is_some());
+    assert!(
+        rt.state
+            .limits
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("muestra"),
+        "{:?}",
+        rt.state.limits.error
+    );
+}
+
+#[test]
 fn el_informe_granulometrico_se_genera_desde_la_interfaz() {
     let mut rt = runtime_with_store();
     press(&mut rt, "nav-3");

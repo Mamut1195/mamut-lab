@@ -911,7 +911,10 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                     "calculate-limits",
                     "Calcular límites",
                     |s: &mut AppState| s.limits_calculate(),
-                )),
+                ))
+                .child(action("atterberg-pdf", "Informe PDF", |s: &mut AppState| {
+                    s.report_atterberg()
+                })),
         )
         .children(state.limits.error.as_ref().map(|message| {
             text(format!("⚠ {message}"))
@@ -962,11 +965,18 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 )),
         )
         .child(
-            row().w_full().gap(8.0).center_y().child(action(
-                "calculate-density",
-                "Calcular densidad",
-                |s: &mut AppState| s.density_calculate(),
-            )),
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(action(
+                    "calculate-density",
+                    "Calcular densidad",
+                    |s: &mut AppState| s.density_calculate(),
+                ))
+                .child(action("density-pdf", "Informe PDF", |s: &mut AppState| {
+                    s.report_density()
+                })),
         )
         .children(state.density.error.as_ref().map(|message| {
             text(format!("⚠ {message}"))
@@ -1044,6 +1054,9 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 ))
                 .child(action("clear-compaction", "Limpiar puntos", |s: &mut AppState| {
                     s.compaction_clear()
+                }))
+                .child(action("compaction-pdf", "Informe PDF", |s: &mut AppState| {
+                    s.report_compaction()
                 })),
         )
         .children((!state.compaction.points.is_empty()).then(|| {
@@ -1115,6 +1128,9 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 }))
                 .child(action("calculate-cbr", "Calcular CBR", |s: &mut AppState| {
                     s.cbr_calculate()
+                }))
+                .child(action("cbr-pdf", "Informe PDF", |s: &mut AppState| {
+                    s.report_cbr()
                 })),
         )
         .children(state.cbr.error.as_ref().map(|message| {
