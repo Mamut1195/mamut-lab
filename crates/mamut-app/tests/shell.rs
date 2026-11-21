@@ -908,6 +908,7 @@ fn un_cbr_sin_curva_suficiente_no_se_calcula() {
 #[test]
 fn los_cuatro_informes_de_suelos_se_generan() {
     let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "S-2026-0001");
     press(&mut rt, "nav-3");
     rt.state.soils.sample.text = "S-2026-0001".to_owned();
 
@@ -1017,6 +1018,7 @@ fn sin_muestra_no_se_emite_informe_de_suelos() {
 #[test]
 fn el_informe_granulometrico_se_genera_desde_la_interfaz() {
     let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "S-2026-0001");
     press(&mut rt, "nav-3");
 
     rt.state.soils.sample.text = "S-2026-0001".to_owned();
@@ -1193,6 +1195,86 @@ fn editar_despues_de_calcular_invalida_la_granulometria() {
             .as_deref()
             .unwrap_or("")
             .contains("cambiaron"),
+        "{:?}",
+        rt.state.soils.error
+    );
+}
+
+#[test]
+fn un_ensayo_con_coma_decimal_se_puede_guardar() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0040");
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0040");
+    rt.state.test_form.diameter.text = "150,0".to_owned();
+    rt.state.test_form.load.text = "500,0".to_owned();
+
+    press(&mut rt, "calculate-test");
+    press(&mut rt, "save-test");
+
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "calcular y guardar deben aceptar la misma coma: {:?}",
+        rt.state.test_form.error
+    );
+    assert!(rt.state.test_form.saved.is_some());
+}
+
+#[test]
+fn una_muestra_anulada_no_acepta_ensayos() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0041");
+
+    let store = rt.state.store.as_ref().expect("almacén");
+    let actor = mamut_core::Actor::new("local", "Ana Torres").unwrap();
+    store
+        .void_sample(
+            "H-2026-0041",
+            &actor,
+            Timestamp::from_millis(1_763_500_000_000),
+            "duplicada",
+        )
+        .unwrap();
+
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0041");
+    press(&mut rt, "calculate-test");
+    press(&mut rt, "save-test");
+
+    assert!(rt.state.test_form.saved.is_none(), "no se guarda");
+    assert!(
+        rt.state
+            .test_form
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("no acepta ensayos"),
+        "{:?}",
+        rt.state.test_form.error
+    );
+}
+
+#[test]
+fn un_informe_de_una_muestra_no_registrada_se_rechaza() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-9999".to_owned();
+    rt.state.soils.total.text = "1000".to_owned();
+    for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+
+    press(&mut rt, "calculate-granulometry");
+    press(&mut rt, "granulometry-pdf");
+
+    assert!(rt.state.soils.report_path.is_none());
+    assert!(
+        rt.state
+            .soils
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("no existe"),
         "{:?}",
         rt.state.soils.error
     );

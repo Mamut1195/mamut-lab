@@ -251,6 +251,8 @@ pub struct GranulometryReport {
     pub client: String,
     pub project: String,
     pub performed_on: mamut_core::CivilDate,
+    /// Fecha de recepción de la muestra (no la de emisión).
+    pub received_on: mamut_core::CivilDate,
     pub operator: String,
     pub total_dry_g: f64,
     /// `(abertura_mm, retenido_g, % acumulado, % que pasa)` de grueso a fino.
@@ -306,6 +308,7 @@ pub fn render_granulometry_pdf(data: &GranulometryReport) -> Vec<u8> {
     l.row("Muestra", &data.sample_code);
     l.row("Cliente", &data.client);
     l.row("Proyecto", &data.project);
+    l.row("Recepción", &data.received_on.to_iso());
     l.row("Fecha del ensayo", &data.performed_on.to_iso());
 
     l.heading("2. Ensayo");
@@ -338,7 +341,13 @@ pub fn render_granulometry_pdf(data: &GranulometryReport) -> Vec<u8> {
     l.row("Coeficiente de uniformidad (Cu)", &format_option(data.cu));
     l.row("Coeficiente de curvatura (Cc)", &format_option(data.cc));
 
-    l.heading("5. Observaciones");
+    l.heading("5. Conformidad");
+    l.row_wrapped(
+        "Veredicto",
+        "SIN JUICIO DE CONFORMIDAD — no se evaluó contra una especificación aplicable",
+    );
+
+    l.heading("6. Observaciones");
     if data.observations.trim().is_empty() {
         l.paragraph("(sin observaciones)");
     } else {
@@ -488,6 +497,7 @@ mod tests {
             client: "Constructora Andina".into(),
             project: "Torre Norte".into(),
             performed_on: date(),
+            received_on: date(),
             operator: "Ana Torres".into(),
             total_dry_g: 1000.0,
             sieves: vec![

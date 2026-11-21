@@ -169,6 +169,8 @@ pub struct SieveRow {
 /// Resultado de un análisis granulométrico, listo para mostrar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoilsOutcome {
+    /// Muestra para la que se calculó: un informe con otra muestra es un error.
+    pub sample: String,
     pub total_g: f64,
     pub sieves: Vec<SievePass>,
     /// Cuántos tamices sostienen la curva.
@@ -233,6 +235,8 @@ pub struct LimitRow {
 /// Resultado de límites de Atterberg.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LimitsOutcome {
+    /// Muestra para la que se calculó.
+    pub sample: String,
     /// Determinaciones originales: golpes y humedad.
     pub points: Vec<(u32, f64)>,
     pub liquid_limit: f64,
@@ -287,6 +291,8 @@ impl Default for LimitsForm {
 /// Resultado de una determinación de densidad en sitio.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DensityOutcome {
+    /// Muestra para la que se calculó.
+    pub sample: String,
     pub dry_density: f64,
     pub relative_compaction: f64,
     pub moisture_deviation: f64,
@@ -333,8 +339,10 @@ pub struct CompactionPointView {
 }
 
 /// Máximo de la curva de compactación, listo para mostrar.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PeakOutcome {
+    /// Muestra para la que se calculó.
+    pub sample: String,
     pub optimum_moisture: f64,
     pub max_dry_density: f64,
     pub points_used: usize,
@@ -384,6 +392,8 @@ pub struct CbrRow {
 /// Resultado del CBR.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CbrOutcome {
+    /// Muestra para la que se calculó.
+    pub sample: String,
     /// Curva original: penetración y carga unitaria.
     pub points: Vec<(f64, f64)>,
     pub percent: f64,
@@ -880,6 +890,13 @@ impl AppState {
             }
         };
 
+        if !sample.accepts_specimens() {
+            self.test_form.error = Some(format!(
+                "la muestra «{code}» está anulada o completada y no acepta ensayos"
+            ));
+            return;
+        }
+
         let designation = self.test_form.designation.text.trim().to_owned();
         let now = SystemClock.now();
 
@@ -908,15 +925,17 @@ impl AppState {
                 now,
             );
 
-            // Los datos originales se guardan tal como se teclearon.
+            // Los datos originales se guardan tal como se teclearon, salvo la coma decimal:
+            // el dominio exige un número parseable, y en español se escribe con coma.
+            let canonical = |text: &str| text.trim().replace(',', ".");
             let measurements = vec![
-                Measurement::new("diametro", self.test_form.diameter.text.trim(), "mm", now)
+                Measurement::new("diametro", canonical(&self.test_form.diameter.text), "mm", now)
                     .map_err(|error| error.to_string())?,
-                Measurement::new("altura", self.test_form.height.text.trim(), "mm", now)
+                Measurement::new("altura", canonical(&self.test_form.height.text), "mm", now)
                     .map_err(|error| error.to_string())?,
-                Measurement::new("masa", self.test_form.mass.text.trim(), "g", now)
+                Measurement::new("masa", canonical(&self.test_form.mass.text), "g", now)
                     .map_err(|error| error.to_string())?,
-                Measurement::new("carga_maxima", self.test_form.load.text.trim(), "kN", now)
+                Measurement::new("carga_maxima", canonical(&self.test_form.load.text), "kN", now)
                     .map_err(|error| error.to_string())?,
             ];
 
@@ -952,6 +971,9 @@ impl AppState {
             now,
         ) {
             Ok(()) => {
+                // Primer ensayo de la muestra: pasa a «en ensayo». Es el último uso del
+                // préstamo del almacén antes de tocar el estado.
+                let _ = store.begin_testing(&code, &sample.responsible, now);
                 self.test_form.saved = Some(test_id);
                 self.flash = Some(format!("Ensayo guardado para la muestra {code}"));
                 self.load_test_history();
@@ -1269,6 +1291,7 @@ impl AppState {
                 let mut sorted = sieves.clone();
                 sorted.sort_by(|a, b| b.size_mm.total_cmp(&a.size_mm));
                 self.soils.outcome = Some(SoilsOutcome {
+                    sample: self.soils.sample.text.trim().to_owned(),
                     total_g: total,
                     sieves: sorted,
                     sieve_count: outcome.sieve_count,
@@ -1303,10 +1326,13 @@ impl AppState {
         }
 
         let code = self.soils.sample.text.trim().to_owned();
-        if code.is_empty() {
-            self.soils.error = Some("indica la muestra a la que corresponde el informe".into());
-            return;
-        }
+        let sample = match self.require_report_sample(&code, &outcome.sample) {
+            Ok(sample) => sample,
+            Err(message) => {
+                self.soils.error = Some(message);
+                return;
+            }
+        };
         let Some(store) = &self.store else {
             self.soils.error = Some("no hay almacenamiento disponible".into());
             return;
@@ -1331,10 +1357,11 @@ impl AppState {
         let data = GranulometryReport {
             laboratory,
             sample_code: code.clone(),
-            client: String::new(),
-            project: String::new(),
+            client: sample.client.clone(),
+            project: sample.project.clone(),
+            received_on: sample.received_on,
             performed_on: today,
-            operator: String::new(),
+            operator: sample.responsible.name.clone(),
             total_dry_g: outcome.total_g,
             sieves,
             d10: outcome.d10,
@@ -1345,7 +1372,7 @@ impl AppState {
             norm_citation: Some("ASTM D6913 / AASHTO T 27".to_owned()),
             observations: String::new(),
             issued_on: today,
-            responsible: String::new(),
+            responsible: sample.responsible.name.clone(),
         };
 
         if let Err(message) = data.validate() {
@@ -1472,6 +1499,7 @@ impl AppState {
 
         self.limits.computed_from = Some(self.limits_signature());
         self.limits.outcome = Some(LimitsOutcome {
+            sample: self.soils.sample.text.trim().to_owned(),
             points,
             liquid_limit,
             slope,
@@ -1500,6 +1528,7 @@ impl AppState {
             Ok(result) => {
                 self.density.computed_from = Some(self.density_signature());
                 self.density.outcome = Some(DensityOutcome {
+                    sample: self.soils.sample.text.trim().to_owned(),
                     dry_density: result.dry_density_g_cm3,
                     relative_compaction: result.relative_compaction_percent,
                     moisture_deviation: result.moisture_deviation_points,
@@ -1565,6 +1594,7 @@ impl AppState {
         match curve_peak(&points) {
             Some(peak) => {
                 self.compaction.peak = Some(PeakOutcome {
+                    sample: self.soils.sample.text.trim().to_owned(),
                     optimum_moisture: peak.optimum_moisture_percent,
                     max_dry_density: peak.max_dry_density_g_cm3,
                     points_used: peak.points_used,
@@ -1633,6 +1663,7 @@ impl AppState {
             Ok(result) => {
                 self.cbr.computed_from = Some(self.cbr_signature());
                 self.cbr.outcome = Some(CbrOutcome {
+                    sample: self.soils.sample.text.trim().to_owned(),
                     points: points
                         .iter()
                         .map(|point| (point.penetration_mm, point.load_mpa))
@@ -1653,32 +1684,67 @@ impl AppState {
         self.compaction.error = None;
     }
 
+    /// Comprueba que la muestra existe, no está anulada y es la misma para la que se calculó.
+    ///
+    /// Un informe identifica una muestra concreta: emitirlo para otra, para una anulada o
+    /// para un código que no existe produce un documento que afirma algo falso.
+    fn require_report_sample(
+        &self,
+        code: &str,
+        outcome_sample: &str,
+    ) -> std::result::Result<mamut_domain::Sample, String> {
+        if code.is_empty() {
+            return Err("indica la muestra a la que corresponde el informe".to_owned());
+        }
+        if !outcome_sample.is_empty() && outcome_sample != code {
+            return Err(format!(
+                "el resultado se calculó para «{outcome_sample}», no para «{code}»: \
+                 vuelve a calcular con la muestra correcta"
+            ));
+        }
+        let Some(store) = &self.store else {
+            return Err("no hay almacenamiento disponible".to_owned());
+        };
+        match store.find_sample(code) {
+            Ok(Some(sample)) => {
+                if sample.state == mamut_domain::SampleState::Voided {
+                    return Err(format!(
+                        "la muestra «{code}» está anulada: no se emiten informes sobre ella"
+                    ));
+                }
+                Ok(sample)
+            }
+            Ok(None) => Err(format!("no existe la muestra «{code}»")),
+            Err(error) => Err(format!("no se pudo leer la muestra: {error}")),
+        }
+    }
+
     /// Compone y guarda el informe de un ensayo de suelos.
     ///
     /// Reutiliza la maqueta del informe de compresión: la estructura (identificación, datos
     /// originales, cálculos, resultado) es la misma para todos los ensayos, y tener un solo
     /// renderizador evita que un ensayo se imprima distinto que otro.
+    // Los parámetros son los de la ficha del informe: muestra, ensayo, norma, datos
+    // originales, cálculos y resultado. Agruparlos en una estructura no los haría más claros.
+    #[allow(clippy::too_many_arguments)]
     fn emit_soils_report(
         &mut self,
         file_stem: &str,
         test_name: &str,
         norm: (&str, u16, &str),
+        outcome_sample: &str,
         measurements: Vec<ReportLine>,
         calculations: Vec<ReportLine>,
         result: ReportLine,
     ) -> std::result::Result<String, String> {
         let code = self.soils.sample.text.trim().to_owned();
-        if code.is_empty() {
-            return Err("indica la muestra a la que corresponde el informe".to_owned());
-        }
+        let sample = self.require_report_sample(&code, outcome_sample)?;
         let Some(store) = &self.store else {
             return Err("no hay almacenamiento disponible".to_owned());
         };
         let Some(laboratory) = LaboratoryInfo::new("MAMUT Lab") else {
             return Err("identidad del laboratorio no configurada".to_owned());
         };
-
-        let sample = store.find_sample(&code).ok().flatten();
         let today = CivilDate::today(&SystemClock);
         let norm_ref = NormRef::new(
             NormBody::Astm,
@@ -1692,26 +1758,14 @@ impl AppState {
         let data = ReportData {
             laboratory,
             sample_code: code.clone(),
-            client: sample
-                .as_ref()
-                .map(|sample| sample.client.clone())
-                .unwrap_or_default(),
-            project: sample
-                .as_ref()
-                .map(|sample| sample.project.clone())
-                .unwrap_or_default(),
-            received_on: sample
-                .as_ref()
-                .map(|sample| sample.received_on)
-                .unwrap_or(today),
+            client: sample.client.clone(),
+            project: sample.project.clone(),
+            received_on: sample.received_on,
             test_name: test_name.to_owned(),
             method_label: "Normativo".to_owned(),
             norm_citation: Some(norm_ref.citation()),
             performed_on: today,
-            operator: sample
-                .as_ref()
-                .map(|sample| sample.responsible.name.clone())
-                .unwrap_or_default(),
+            operator: sample.responsible.name.clone(),
             equipment: None,
             measurements,
             calculations,
@@ -1720,10 +1774,7 @@ impl AppState {
             conformity: Conformity::evaluate(0.0, &norm_ref, None, None),
             observations: String::new(),
             issued_on: today,
-            responsible: sample
-                .as_ref()
-                .map(|sample| sample.responsible.name.clone())
-                .unwrap_or_default(),
+            responsible: sample.responsible.name.clone(),
         };
 
         let bytes = render_pdf(&data);
@@ -1784,6 +1835,7 @@ impl AppState {
             "atterberg",
             "Límites de Atterberg",
             ("D4318", 2024, "Límites líquido y plástico"),
+            &outcome.sample,
             measurements,
             calculations,
             ReportLine::with_unit(
@@ -1799,7 +1851,7 @@ impl AppState {
 
     /// Emite el informe de compactación.
     pub fn report_compaction(&mut self) {
-        let Some(peak) = self.compaction.peak else {
+        let Some(peak) = self.compaction.peak.clone() else {
             self.compaction.error = Some("calcula el máximo antes de emitir el informe".into());
             return;
         };
@@ -1824,6 +1876,7 @@ impl AppState {
             "compactacion",
             "Compactación de laboratorio",
             ("D698", 2024, "Ensayo de compactación"),
+            &peak.sample,
             points,
             calculations,
             ReportLine::with_unit(
@@ -1876,6 +1929,7 @@ impl AppState {
             "cbr",
             "California Bearing Ratio",
             ("D1883", 2024, "CBR de suelos compactados"),
+            &outcome.sample,
             measurements,
             calculations,
             ReportLine::with_unit("CBR", format!("{:.1}", outcome.percent), "%"),
@@ -1918,6 +1972,7 @@ impl AppState {
             "densidad",
             "Densidad en sitio",
             ("D6938", 2024, "Densidad y humedad en sitio"),
+            &outcome.sample,
             measurements,
             calculations,
             ReportLine::with_unit(

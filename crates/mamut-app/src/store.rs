@@ -80,17 +80,30 @@ impl Store {
             })
             .collect();
 
-        let mut file = dir.join(format!("{sanitized}.pdf"));
-        let mut attempt = 1u32;
-        while file.exists() {
-            attempt += 1;
-            file = dir.join(format!("{sanitized}-{attempt}.pdf"));
-            if attempt > 10_000 {
-                return Err("no se pudo encontrar un nombre libre para el informe".to_owned());
+        // `create_new` falla si el archivo existe: entre la comprobación y la escritura no
+        // hay ventana para que otra instancia escriba el mismo nombre.
+        for attempt in 1..=10_000u32 {
+            let file = if attempt == 1 {
+                dir.join(format!("{sanitized}.pdf"))
+            } else {
+                dir.join(format!("{sanitized}-{attempt}.pdf"))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file)
+            {
+                Ok(mut handle) => {
+                    use std::io::Write;
+                    handle.write_all(bytes).map_err(display)?;
+                    handle.flush().map_err(display)?;
+                    return Ok(file);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(display(error)),
             }
         }
-        std::fs::write(&file, bytes).map_err(display)?;
-        Ok(file)
+        Err("no se pudo encontrar un nombre libre para el informe".to_owned())
     }
 
     /// Guarda una muestra y deja constancia en la auditoría.
@@ -216,6 +229,15 @@ impl Store {
             .find_sample(code)?
             .ok_or_else(|| format!("no existe la muestra «{code}»"))?;
 
+        // Un adjunto de laboratorio es una foto o un documento: 50 MB es margen de sobra.
+        const MAX_ATTACHMENT_BYTES: u64 = 50 * 1024 * 1024;
+        let size_on_disk = std::fs::metadata(source).map_err(display)?.len();
+        if size_on_disk > MAX_ATTACHMENT_BYTES {
+            return Err(format!(
+                "el archivo pesa {} MB y el límite es 50 MB",
+                size_on_disk / (1024 * 1024)
+            ));
+        }
         let bytes = std::fs::read(source).map_err(display)?;
         if bytes.is_empty() {
             return Err("el archivo está vacío".to_owned());
@@ -263,6 +285,40 @@ impl Store {
         self.db.audit().append(&entry).map_err(display)?;
 
         Ok(format!("{file_name} ({})", &sha256[..12]))
+    }
+
+    /// Marca la muestra como «en ensayo» cuando recibe su primer espécimen.
+    ///
+    /// La transición la decide el dominio; aquí solo se aplica si es válida. Una muestra
+    /// anulada o completada no se toca.
+    pub fn begin_testing(&self, code: &str, actor: &Actor, at: Timestamp) -> StoreResult<()> {
+        let Some(mut sample) = self.find_sample(code)? else {
+            return Ok(());
+        };
+        if sample.state == SampleState::InTesting
+            || !sample.state.can_transition_to(SampleState::InTesting)
+        {
+            return Ok(());
+        }
+        sample
+            .transition(SampleState::InTesting)
+            .map_err(|error| error.to_string())?;
+        self.db
+            .samples()
+            .update_state(sample.id, sample.state, sample.revision)
+            .map_err(display)?;
+
+        let entry = AuditEntry::new(
+            at,
+            actor.clone(),
+            "sample",
+            sample.id.to_string(),
+            AuditAction::Updated,
+        )
+        .map_err(display)?
+        .with_detail(serde_json::json!({ "estado": sample.state.as_str() }));
+        self.db.audit().append(&entry).map_err(display)?;
+        Ok(())
     }
 
     /// Adjuntos de una muestra.
