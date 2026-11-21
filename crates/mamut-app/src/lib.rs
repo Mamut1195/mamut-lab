@@ -13,6 +13,6 @@ pub mod store;
 pub mod view;
 
 pub use pack::{EMBEDDED_PACK, PackSelection, load_pack};
-pub use state::{AppState, Nav, SampleRow};
+pub use state::{AppState, CompactionPointView, Nav, SampleRow};
 pub use store::Store;
 pub use view::{handle_key, view, window_key};

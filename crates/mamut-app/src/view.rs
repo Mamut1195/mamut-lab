@@ -779,6 +779,53 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         column
     });
 
+    let cbr_rows: Vec<El> = (0..state.cbr.rows.len())
+        .map(|index| {
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(
+                    TextField::new("Penetración (mm)", &state.cbr.rows[index].penetration)
+                        .placeholder("mm")
+                        .on_edit(move |s: &mut AppState| &mut s.cbr.rows[index].penetration)
+                        .build(&kit)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+                .child(
+                    TextField::new("Carga unitaria (MPa)", &state.cbr.rows[index].load)
+                        .placeholder("MPa")
+                        .on_edit(move |s: &mut AppState| &mut s.cbr.rows[index].load)
+                        .build(&kit)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+        })
+        .collect();
+
+    let cbr_result: Option<El> = state.cbr.outcome.as_ref().map(|outcome| {
+        col()
+            .key("cbr-result")
+            .w_full()
+            .gap(2.0)
+            .padding(10.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.bg_deep)
+            .child(
+                text(format!("CBR: {:.1} %", outcome.percent))
+                    .font(kit.ty.small)
+                    .color(kit.c.text_base),
+            )
+            .child(
+                text(format!(
+                    "Gobierna la penetración de {:.2} mm · corrimiento de origen {:.2} mm",
+                    outcome.governing_penetration, outcome.offset
+                ))
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+            )
+    });
+
     let soils_panel: El = col()
         .key("soils-panel")
         .w_full()
@@ -928,7 +975,156 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 .color(kit.c.text_base)
                 .padding(4.0)
         }))
-        .children(density_result);
+        .children(density_result)
+        .child(el().w_full().h(1.0).fill(kit.c.layer_02))
+        .child(
+            text("Compactación")
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text("Cada punto sale de las masas del molde y de la muestra. El máximo se ajusta con todos los puntos.")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Molde + muestra (g)",
+                    "5000",
+                    &state.compaction.mold_plus,
+                    |s: &mut AppState| &mut s.compaction.mold_plus,
+                ))
+                .child(field(
+                    "Molde (g)",
+                    "3000",
+                    &state.compaction.mold,
+                    |s: &mut AppState| &mut s.compaction.mold,
+                ))
+                .child(field(
+                    "Volumen (cm³)",
+                    "943",
+                    &state.compaction.volume,
+                    |s: &mut AppState| &mut s.compaction.volume,
+                )),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Muestra húmeda (g)",
+                    "220",
+                    &state.compaction.wet_sample,
+                    |s: &mut AppState| &mut s.compaction.wet_sample,
+                ))
+                .child(field(
+                    "Muestra seca (g)",
+                    "200",
+                    &state.compaction.dry_sample,
+                    |s: &mut AppState| &mut s.compaction.dry_sample,
+                ))
+                .child(action(
+                    "add-compaction-point",
+                    "Añadir punto",
+                    |s: &mut AppState| s.compaction_add_point(),
+                )),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(action(
+                    "calculate-compaction",
+                    "Calcular máximo",
+                    |s: &mut AppState| s.compaction_calculate(),
+                ))
+                .child(action("clear-compaction", "Limpiar puntos", |s: &mut AppState| {
+                    s.compaction_clear()
+                })),
+        )
+        .children((!state.compaction.points.is_empty()).then(|| {
+            col()
+                .key("compaction-points")
+                .w_full()
+                .gap(1.0)
+                .children(state.compaction.points.iter().map(|point| {
+                    text(format!(
+                        "{:.1} % · {:.3} g/cm³",
+                        point.moisture, point.dry_density
+                    ))
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_faint)
+                }))
+        }))
+        .children(state.compaction.error.as_ref().map(|message| {
+            text(format!("⚠ {message}"))
+                .key("compaction-error")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_base)
+                .padding(4.0)
+        }))
+        .children(state.compaction.peak.as_ref().map(|peak| {
+            let mut column = col()
+                .key("compaction-result")
+                .w_full()
+                .gap(2.0)
+                .padding(10.0)
+                .radius(kit.radius.sm)
+                .fill(kit.c.bg_deep)
+                .child(
+                    text(format!(
+                        "Humedad óptima {:.1} % · densidad máxima {:.3} g/cm³",
+                        peak.optimum_moisture, peak.max_dry_density
+                    ))
+                    .font(kit.ty.small)
+                    .color(kit.c.text_base),
+                )
+                .child(
+                    text(format!("{} puntos sostienen el ajuste", peak.points_used))
+                        .font(kit.ty.text_xsmall)
+                        .color(kit.c.text_muted),
+                );
+            if peak.below_max_measured {
+                column = column.child(
+                    text("⚠ el máximo ajustado queda por debajo del mayor valor medido: revísalo")
+                        .font(kit.ty.text_xsmall)
+                        .color(kit.c.text_base),
+                );
+            }
+            column
+        }))
+        .child(el().w_full().h(1.0).fill(kit.c.layer_02))
+        .child(text("CBR").font(kit.ty.small).color(kit.c.text_base))
+        .child(
+            text("Carga unitaria frente a penetración. La curva debe pasar de 5,08 mm.")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint),
+        )
+        .children(cbr_rows)
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(action("add-cbr-row", "Añadir fila", |s: &mut AppState| {
+                    s.cbr_add_row()
+                }))
+                .child(action("calculate-cbr", "Calcular CBR", |s: &mut AppState| {
+                    s.cbr_calculate()
+                })),
+        )
+        .children(state.cbr.error.as_ref().map(|message| {
+            text(format!("⚠ {message}"))
+                .key("cbr-error")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_base)
+                .padding(4.0)
+        }))
+        .children(cbr_result);
 
     // ------------------------------------------------ herramientas de la muestra
     let export_button = |key: &'static str, label: &'static str, format: ExportFormat| {

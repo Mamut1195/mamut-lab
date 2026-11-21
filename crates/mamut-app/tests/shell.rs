@@ -773,6 +773,139 @@ fn sin_densidad_maxima_no_hay_compactacion() {
 }
 
 #[test]
+fn un_punto_de_compactacion_se_calcula_desde_las_masas() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    rt.state.compaction.mold_plus.text = "5000".to_owned();
+    rt.state.compaction.mold.text = "3000".to_owned();
+    rt.state.compaction.volume.text = "943".to_owned();
+    rt.state.compaction.wet_sample.text = "220".to_owned();
+    rt.state.compaction.dry_sample.text = "200".to_owned();
+
+    rt.state.compaction_add_point();
+
+    assert!(
+        rt.state.compaction.error.is_none(),
+        "{:?}",
+        rt.state.compaction.error
+    );
+    let point = rt.state.compaction.points[0];
+    assert!((point.moisture - 10.0).abs() < 1e-9, "{}", point.moisture);
+    // 2000 g / 943 cm³ = 2,1209 g/cm³ húmeda; seca = 2,1209 / 1,10 = 1,9281.
+    assert!(
+        (point.dry_density - 1.928_083).abs() < 1e-5,
+        "{}",
+        point.dry_density
+    );
+    // Las masas de la muestra se limpian para el siguiente punto; el molde no.
+    assert!(rt.state.compaction.wet_sample.text.is_empty());
+    assert_eq!(rt.state.compaction.mold.text, "3000");
+}
+
+#[test]
+fn tres_puntos_definen_el_maximo_de_la_curva() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.compaction.mold.text = "3000".to_owned();
+    rt.state.compaction.volume.text = "943".to_owned();
+
+    // Tres puntos con humedades 8, 10 y 12 % y densidades secas 1,85 / 1,95 / 1,90.
+    for (mold_plus, wet, dry) in [
+        ("4884.1", "216", "200"),
+        ("5022.7", "220", "200"),
+        ("5006.7", "224", "200"),
+    ] {
+        rt.state.compaction.mold_plus.text = mold_plus.to_owned();
+        rt.state.compaction.wet_sample.text = wet.to_owned();
+        rt.state.compaction.dry_sample.text = dry.to_owned();
+        rt.state.compaction_add_point();
+        assert!(
+            rt.state.compaction.error.is_none(),
+            "{:?}",
+            rt.state.compaction.error
+        );
+    }
+    assert_eq!(rt.state.compaction.points.len(), 3);
+
+    rt.state.compaction_calculate();
+
+    let peak = rt.state.compaction.peak.expect("hay máximo");
+    assert!(
+        (peak.optimum_moisture - 10.33).abs() < 0.1,
+        "{}",
+        peak.optimum_moisture
+    );
+    assert!(peak.max_dry_density > 1.94 && peak.max_dry_density < 1.96);
+    assert_eq!(peak.points_used, 3);
+}
+
+#[test]
+fn con_dos_puntos_no_hay_maximo_de_compactacion() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state
+        .compaction
+        .points
+        .push(mamut_app::CompactionPointView {
+            moisture: 8.0,
+            dry_density: 1.85,
+        });
+    rt.state
+        .compaction
+        .points
+        .push(mamut_app::CompactionPointView {
+            moisture: 10.0,
+            dry_density: 1.95,
+        });
+
+    rt.state.compaction_calculate();
+
+    assert!(rt.state.compaction.peak.is_none());
+    assert!(
+        rt.state
+            .compaction
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("tres"),
+        "{:?}",
+        rt.state.compaction.error
+    );
+}
+
+#[test]
+fn el_cbr_se_calcula_con_la_penetracion_que_gobierna() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    // Curva lineal: 3,4474 MPa a 2,54 mm y 5,1711 MPa a 5,08 mm → 50 %.
+    rt.state.cbr.rows[0].load.text = "0".to_owned();
+    rt.state.cbr.rows[3].load.text = "3.4474".to_owned();
+    rt.state.cbr.rows[4].load.text = "5.1711".to_owned();
+
+    rt.state.cbr_calculate();
+
+    assert!(rt.state.cbr.error.is_none(), "{:?}", rt.state.cbr.error);
+    let outcome = rt.state.cbr.outcome.expect("resultado");
+    assert!((outcome.percent - 50.0).abs() < 0.01, "{}", outcome.percent);
+    assert!((outcome.governing_penetration - 2.54).abs() < 1e-9);
+    assert!(outcome.offset.abs() < 1e-9);
+}
+
+#[test]
+fn un_cbr_sin_curva_suficiente_no_se_calcula() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.cbr.rows[3].load.text = "3.4474".to_owned();
+
+    rt.state.cbr_calculate();
+
+    assert!(rt.state.cbr.outcome.is_none());
+    assert!(rt.state.cbr.error.is_some());
+}
+
+#[test]
 fn el_informe_granulometrico_se_genera_desde_la_interfaz() {
     let mut rt = runtime_with_store();
     press(&mut rt, "nav-3");

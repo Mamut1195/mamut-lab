@@ -9,8 +9,9 @@
 use std::cell::Cell;
 
 use mamut_calculations::{
-    CylinderCompressionInput, ENGINE_VERSION, RoundingPolicy, SievePass, calculate, field_density,
-    liquid_limit_multi_point, plastic_limit, plasticity_index, sieve_analysis,
+    CompactionPoint, CylinderCompressionInput, ENGINE_VERSION, PenetrationPoint, RoundingPolicy,
+    SievePass, calculate, cbr_from_curve, curve_peak, dry_density, field_density,
+    liquid_limit_multi_point, plastic_limit, plasticity_index, sieve_analysis, wet_density,
 };
 use mamut_core::{Actor, CivilDate, Clock, Force, Length, Mass, SystemClock, Timestamp};
 use mamut_domain::{Material, Measurement, ResultRef, Sample, SampleCode, Specimen, TestRecord};
@@ -309,6 +310,101 @@ impl Default for DensityForm {
     }
 }
 
+/// Un punto de la curva de compactación ya calculado.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompactionPointView {
+    pub moisture: f64,
+    pub dry_density: f64,
+}
+
+/// Máximo de la curva de compactación, listo para mostrar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PeakOutcome {
+    pub optimum_moisture: f64,
+    pub max_dry_density: f64,
+    pub points_used: usize,
+    /// El ajuste quedó por debajo del mayor valor medido: revisar antes de usarlo.
+    pub below_max_measured: bool,
+}
+
+/// Formulario de compactación.
+pub struct CompactionForm {
+    pub mold_plus: TextEdit,
+    pub mold: TextEdit,
+    pub volume: TextEdit,
+    pub wet_sample: TextEdit,
+    pub dry_sample: TextEdit,
+    pub points: Vec<CompactionPointView>,
+    pub error: Option<String>,
+    pub peak: Option<PeakOutcome>,
+}
+
+impl CompactionForm {
+    pub fn empty() -> Self {
+        Self {
+            mold_plus: TextEdit::new(""),
+            mold: TextEdit::new(""),
+            volume: TextEdit::new(""),
+            wet_sample: TextEdit::new(""),
+            dry_sample: TextEdit::new(""),
+            points: Vec::new(),
+            error: None,
+            peak: None,
+        }
+    }
+}
+
+impl Default for CompactionForm {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+/// Una fila de la curva carga–penetración.
+pub struct CbrRow {
+    pub penetration: TextEdit,
+    pub load: TextEdit,
+}
+
+/// Resultado del CBR.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CbrOutcome {
+    pub percent: f64,
+    pub governing_penetration: f64,
+    pub offset: f64,
+}
+
+/// Formulario de CBR.
+pub struct CbrForm {
+    pub rows: Vec<CbrRow>,
+    pub error: Option<String>,
+    pub outcome: Option<CbrOutcome>,
+}
+
+impl CbrForm {
+    pub fn empty() -> Self {
+        let mut form = Self {
+            rows: Vec::new(),
+            error: None,
+            outcome: None,
+        };
+        // Penetraciones habituales del ensayo: la curva debe pasar de 5,08 mm.
+        for penetration in ["0", "0.5", "1.0", "2.54", "5.08"] {
+            form.rows.push(CbrRow {
+                penetration: TextEdit::new(penetration),
+                load: TextEdit::new(""),
+            });
+        }
+        form
+    }
+}
+
+impl Default for CbrForm {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 /// Borrador del ensayo de compresión de cilindros.
 pub struct TestForm {
     pub sample_code: TextEdit,
@@ -418,6 +514,10 @@ pub struct AppState {
     pub limits: LimitsForm,
     /// Formulario de densidad en sitio.
     pub density: DensityForm,
+    /// Formulario de compactación.
+    pub compaction: CompactionForm,
+    /// Formulario de CBR.
+    pub cbr: CbrForm,
     /// Historial del ensayo para la muestra escrita en el formulario.
     pub test_history: Vec<TestRow>,
     /// Descriptor del ensayo, tomado del paquete normativo al arrancar.
@@ -462,6 +562,8 @@ impl AppState {
             soils: SoilsForm::empty(),
             limits: LimitsForm::empty(),
             density: DensityForm::empty(),
+            compaction: CompactionForm::empty(),
+            cbr: CbrForm::empty(),
             test_history: Vec::new(),
             descriptor: None,
             tool_code: TextEdit::new(""),
@@ -1352,6 +1454,144 @@ impl AppState {
             }
             Err(message) => self.density.error = Some(message),
         }
+    }
+
+    /// Calcula un punto de la curva de compactación y lo añade a la lista.
+    ///
+    /// El punto se calcula desde las masas del molde y de la muestra: pedir la densidad seca
+    /// ya calculada convertiría la pantalla en un formulario de transcripción.
+    pub fn compaction_add_point(&mut self) {
+        self.compaction.error = None;
+
+        let parsed = (|| -> std::result::Result<(f64, f64), String> {
+            let mold_plus = parse_number(&self.compaction.mold_plus.text, "molde con muestra")?;
+            let mold = parse_number(&self.compaction.mold.text, "masa del molde")?;
+            let volume = parse_number(&self.compaction.volume.text, "volumen del molde")?;
+            let wet_sample = parse_number(&self.compaction.wet_sample.text, "muestra húmeda")?;
+            let dry_sample = parse_number(&self.compaction.dry_sample.text, "muestra seca")?;
+
+            let wet = wet_density(mold_plus, mold, volume).map_err(|error| error.to_string())?;
+            let moisture = mamut_calculations::compaction::moisture_percent(wet_sample, dry_sample)
+                .map_err(|error| error.to_string())?;
+            let dry = dry_density(wet, moisture).map_err(|error| error.to_string())?;
+            Ok((moisture, dry))
+        })();
+
+        match parsed {
+            Ok((moisture, dry)) => {
+                self.compaction.points.push(CompactionPointView {
+                    moisture,
+                    dry_density: dry,
+                });
+                self.compaction.peak = None;
+                // Se limpian las masas de la muestra para el siguiente punto, no el molde.
+                self.compaction.wet_sample = TextEdit::new("");
+                self.compaction.dry_sample = TextEdit::new("");
+                self.flash = Some(format!("Punto añadido: {moisture:.1} % · {dry:.3} g/cm³"));
+            }
+            Err(message) => self.compaction.error = Some(message),
+        }
+    }
+
+    /// Calcula el máximo de la curva con los puntos acumulados.
+    pub fn compaction_calculate(&mut self) {
+        self.compaction.error = None;
+        self.compaction.peak = None;
+
+        let points: Vec<CompactionPoint> = self
+            .compaction
+            .points
+            .iter()
+            .map(|point| CompactionPoint {
+                moisture_percent: point.moisture,
+                dry_density_g_cm3: point.dry_density,
+            })
+            .collect();
+
+        match curve_peak(&points) {
+            Some(peak) => {
+                self.compaction.peak = Some(PeakOutcome {
+                    optimum_moisture: peak.optimum_moisture_percent,
+                    max_dry_density: peak.max_dry_density_g_cm3,
+                    points_used: peak.points_used,
+                    below_max_measured: peak.below_max_measured,
+                });
+            }
+            None => {
+                self.compaction.error = Some(
+                    "los puntos no definen un máximo defendible: hacen falta al menos tres y \
+                     que la curva suba y baje dentro del rango ensayado"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+
+    /// Añade una fila a la curva carga–penetración.
+    pub fn cbr_add_row(&mut self) {
+        self.cbr.rows.push(CbrRow {
+            penetration: TextEdit::new(""),
+            load: TextEdit::new(""),
+        });
+    }
+
+    /// Calcula el CBR con la curva introducida.
+    pub fn cbr_calculate(&mut self) {
+        self.cbr.error = None;
+        self.cbr.outcome = None;
+
+        let parsed = (|| -> std::result::Result<Vec<PenetrationPoint>, String> {
+            let mut points = Vec::new();
+            for (index, row) in self.cbr.rows.iter().enumerate() {
+                let penetration = row.penetration.text.trim();
+                let load = row.load.text.trim();
+                // Una fila existe cuando tiene carga: el formulario trae las penetraciones
+                // habituales ya escritas. Carga sin penetración sí es un error.
+                if load.is_empty() {
+                    continue;
+                }
+                if penetration.is_empty() {
+                    return Err(format!(
+                        "la fila {} tiene carga pero no penetración",
+                        index + 1
+                    ));
+                }
+                points.push(PenetrationPoint {
+                    penetration_mm: parse_number(penetration, "penetración")?,
+                    load_mpa: parse_number(load, "carga unitaria")?,
+                });
+            }
+            if points.is_empty() {
+                return Err("no hay ningún punto de la curva".to_owned());
+            }
+            Ok(points)
+        })();
+
+        let points = match parsed {
+            Ok(points) => points,
+            Err(message) => {
+                self.cbr.error = Some(message);
+                return;
+            }
+        };
+
+        match cbr_from_curve(&points) {
+            Ok(result) => {
+                self.cbr.outcome = Some(CbrOutcome {
+                    percent: result.percent,
+                    governing_penetration: result.governing_penetration_mm,
+                    offset: result.offset_mm,
+                });
+            }
+            Err(error) => self.cbr.error = Some(error.to_string()),
+        }
+    }
+
+    /// Vacía los puntos de la curva de compactación.
+    pub fn compaction_clear(&mut self) {
+        self.compaction.points.clear();
+        self.compaction.peak = None;
+        self.compaction.error = None;
     }
 
     /// Texto de la barra de estado.
