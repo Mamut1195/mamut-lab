@@ -848,6 +848,11 @@ fn con_dos_puntos_no_hay_maximo_de_compactacion() {
         .compaction
         .points
         .push(mamut_app::CompactionPointView {
+            mold_g: 3000.0,
+            mold_plus_g: 5000.0,
+            volume_cm3: 943.0,
+            wet_sample_g: 220.0,
+            dry_sample_g: 200.0,
             moisture: 8.0,
             dry_density: 1.85,
         });
@@ -855,6 +860,11 @@ fn con_dos_puntos_no_hay_maximo_de_compactacion() {
         .compaction
         .points
         .push(mamut_app::CompactionPointView {
+            mold_g: 3000.0,
+            mold_plus_g: 5200.0,
+            volume_cm3: 943.0,
+            wet_sample_g: 220.0,
+            dry_sample_g: 200.0,
             moisture: 10.0,
             dry_density: 1.95,
         });
@@ -1394,4 +1404,111 @@ fn sin_muestra_la_seccion_de_informes_avisa() {
         "{:?}",
         rt.state.reports_error
     );
+}
+
+#[test]
+fn cambiar_el_volumen_tras_los_puntos_no_altera_el_informe() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "S-2026-0070");
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0070".to_owned();
+
+    rt.state.compaction.mold.text = "3000".to_owned();
+    rt.state.compaction.volume.text = "943".to_owned();
+    for (mold_plus, wet, dry) in [
+        ("4884.1", "216", "200"),
+        ("5022.7", "220", "200"),
+        ("5006.7", "224", "200"),
+    ] {
+        rt.state.compaction.mold_plus.text = mold_plus.to_owned();
+        rt.state.compaction.wet_sample.text = wet.to_owned();
+        rt.state.compaction.dry_sample.text = dry.to_owned();
+        rt.state.compaction_add_point();
+    }
+    rt.state.compaction_calculate();
+    let peak_before = rt.state.compaction.peak.clone().expect("máximo");
+
+    // El volumen se cambia después: los puntos ya tienen el suyo y el informe los usa.
+    rt.state.compaction.volume.text = "2000".to_owned();
+    rt.state.report_compaction();
+
+    assert!(
+        rt.state.compaction.error.is_none(),
+        "el informe no debía fallar: {:?}",
+        rt.state.compaction.error
+    );
+    assert_eq!(
+        rt.state
+            .compaction
+            .peak
+            .as_ref()
+            .map(|peak| peak.max_dry_density),
+        Some(peak_before.max_dry_density),
+        "el máximo no cambia por editar el texto"
+    );
+}
+
+#[test]
+fn tocar_las_pesadas_tras_calcular_bloquea_el_informe() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "S-2026-0071");
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0071".to_owned();
+
+    rt.state.compaction.mold.text = "3000".to_owned();
+    rt.state.compaction.volume.text = "943".to_owned();
+    for (mold_plus, wet, dry) in [
+        ("4884.1", "216", "200"),
+        ("5022.7", "220", "200"),
+        ("5006.7", "224", "200"),
+    ] {
+        rt.state.compaction.mold_plus.text = mold_plus.to_owned();
+        rt.state.compaction.wet_sample.text = wet.to_owned();
+        rt.state.compaction.dry_sample.text = dry.to_owned();
+        rt.state.compaction_add_point();
+    }
+    rt.state.compaction_calculate();
+
+    // Se altera una pesada de un punto ya calculado.
+    rt.state.compaction.points[0].volume_cm3 = 500.0;
+    rt.state.report_compaction();
+
+    assert!(
+        rt.state
+            .compaction
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("cambiaron"),
+        "{:?}",
+        rt.state.compaction.error
+    );
+}
+
+#[test]
+fn la_granulometria_sin_d60_no_guarda_un_diametro_imposible() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "S-2026-0072");
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0072".to_owned();
+    rt.state.soils.total.text = "1000".to_owned();
+    // Pasa 99, 98, 97, 96 y 95 %: nunca alcanza el 60 %.
+    for (index, value) in ["10", "10", "10", "10", "10"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+    press(&mut rt, "calculate-granulometry");
+    assert!(rt.state.soils.outcome.is_some());
+
+    press(&mut rt, "granulometry-pdf");
+    assert!(rt.state.soils.error.is_none(), "{:?}", rt.state.soils.error);
+
+    let store = rt.state.store.as_ref().expect("almacén");
+    let tests = store.soil_tests_for("S-2026-0072").unwrap();
+    assert_eq!(tests.len(), 1);
+    assert!(
+        !tests[0].result_unit.contains("mm"),
+        "sin D60 no se guarda un diámetro: {}",
+        tests[0].result_unit
+    );
+    assert!(tests[0].result_value > 0.0, "y el valor no es cero");
 }

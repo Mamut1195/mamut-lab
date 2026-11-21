@@ -51,6 +51,10 @@ fn human_size(bytes: i64) -> String {
 /// aviso de golpes fuera de rango y las determinaciones originales.
 type LimitFitParts = (f64, f64, f64, usize, bool, Vec<(u32, f64)>);
 
+/// Pesadas de un punto de compactación: molde, molde+muestra, volumen, húmeda, seca y los
+/// dos derivados (humedad y densidad seca).
+type CompactionPointParts = (f64, f64, f64, f64, f64, f64, f64);
+
 /// Secciones de la navegación lateral.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nav {
@@ -238,7 +242,7 @@ impl Default for SoilsForm {
     }
 }
 
-/// Piezas del ajuste del límite líquido: valor, pendiente, R², determinaciones, aviso\n/// de golpes fuera de rango y las determinaciones originales.\ntype LimitFitParts = (f64, f64, f64, usize, bool, Vec<(u32, f64)>);\n\n/// Una determinación del límite líquido en el formulario.
+/// Una determinación del límite líquido en el formulario.
 pub struct LimitRow {
     pub blows: TextEdit,
     pub moisture: TextEdit,
@@ -349,6 +353,12 @@ impl Default for DensityForm {
 /// Un punto de la curva de compactación ya calculado.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompactionPointView {
+    /// Pesadas originales del punto. Sin ellas la curva no se puede auditar.
+    pub mold_g: f64,
+    pub mold_plus_g: f64,
+    pub volume_cm3: f64,
+    pub wet_sample_g: f64,
+    pub dry_sample_g: f64,
     pub moisture: f64,
     pub dry_density: f64,
 }
@@ -367,6 +377,8 @@ pub struct PeakOutcome {
 
 /// Formulario de compactación.
 pub struct CompactionForm {
+    /// Firma de las pesadas con las que se calculó el máximo.
+    pub computed_from: Option<String>,
     pub mold_plus: TextEdit,
     pub mold: TextEdit,
     pub volume: TextEdit,
@@ -380,6 +392,7 @@ pub struct CompactionForm {
 impl CompactionForm {
     pub fn empty() -> Self {
         Self {
+            computed_from: None,
             mold_plus: TextEdit::new(""),
             mold: TextEdit::new(""),
             volume: TextEdit::new(""),
@@ -1480,13 +1493,20 @@ impl AppState {
                     }).collect::<Vec<_>>(),
                 })
                 .to_string();
-                let headline = outcome.d60.unwrap_or(0.0);
+                // El resultado de una granulometría es la curva; se guarda como valor el
+                // porcentaje que pasa el tamiz más fino. Un D60 inexistente no se convierte
+                // en 0,0 mm, que es un diámetro imposible.
+                let headline = outcome
+                    .passing
+                    .last()
+                    .map(|(_, passing)| *passing)
+                    .unwrap_or(0.0);
                 match self.register_emission(
                     "granulometria",
                     "SOIL-GRANULOMETRIA",
                     &inputs,
                     headline,
-                    "mm",
+                    "% que pasa el tamiz más fino",
                     &shown,
                 ) {
                     Ok(()) => {
@@ -1660,7 +1680,7 @@ impl AppState {
     pub fn compaction_add_point(&mut self) {
         self.compaction.error = None;
 
-        let parsed = (|| -> std::result::Result<(f64, f64), String> {
+        let parsed = (|| -> std::result::Result<CompactionPointParts, String> {
             let mold_plus = parse_number(&self.compaction.mold_plus.text, "molde con muestra")?;
             let mold = parse_number(&self.compaction.mold.text, "masa del molde")?;
             let volume = parse_number(&self.compaction.volume.text, "volumen del molde")?;
@@ -1671,12 +1691,19 @@ impl AppState {
             let moisture = mamut_calculations::compaction::moisture_percent(wet_sample, dry_sample)
                 .map_err(|error| error.to_string())?;
             let dry = dry_density(wet, moisture).map_err(|error| error.to_string())?;
-            Ok((moisture, dry))
+            Ok((
+                mold, mold_plus, volume, wet_sample, dry_sample, moisture, dry,
+            ))
         })();
 
         match parsed {
-            Ok((moisture, dry)) => {
+            Ok((mold, mold_plus, volume, wet_sample, dry_sample, moisture, dry)) => {
                 self.compaction.points.push(CompactionPointView {
+                    mold_g: mold,
+                    mold_plus_g: mold_plus,
+                    volume_cm3: volume,
+                    wet_sample_g: wet_sample,
+                    dry_sample_g: dry_sample,
                     moisture,
                     dry_density: dry,
                 });
@@ -1707,6 +1734,7 @@ impl AppState {
 
         match curve_peak(&points) {
             Some(peak) => {
+                self.compaction.computed_from = Some(self.compaction_signature());
                 self.compaction.peak = Some(PeakOutcome {
                     sample: self.soils.sample.text.trim().to_owned(),
                     optimum_moisture: peak.optimum_moisture_percent,
@@ -2037,47 +2065,54 @@ impl AppState {
     /// Emite el informe de compactación.
     pub fn report_compaction(&mut self) {
         self.compaction.error = None;
+        if let Err(message) =
+            self.require_fresh(&self.compaction_signature(), &self.compaction.computed_from)
+        {
+            self.compaction.error = Some(message);
+            return;
+        }
         let Some(peak) = self.compaction.peak.clone() else {
             self.compaction.error = Some("calcula el máximo antes de emitir el informe".into());
             return;
         };
-        let mut points: Vec<ReportLine> = vec![
-            ReportLine::with_unit("Masa del molde", self.compaction.mold.text.trim(), "g"),
-            ReportLine::with_unit(
-                "Molde con muestra",
-                self.compaction.mold_plus.text.trim(),
-                "g",
-            ),
-            ReportLine::with_unit(
-                "Volumen del molde",
-                self.compaction.volume.text.trim(),
-                "cm³",
-            ),
-        ];
-        points.extend(
-            self.compaction
-                .points
-                .iter()
-                .map(|point| {
-                    ReportLine::with_unit(
-                        format!("Punto a {:.1} %", point.moisture),
-                        format!("{:.3}", point.dry_density),
-                        "g/cm³",
-                    )
-                })
-                .collect::<Vec<ReportLine>>(),
-        );
+        // Cada punto imprime sus propias pesadas: el informe no puede mostrar un molde o un
+        // volumen que ninguno de los puntos usó.
+        let points: Vec<ReportLine> = self
+            .compaction
+            .points
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                ReportLine::with_unit(
+                    format!("Punto {}", index + 1),
+                    format!(
+                        "molde {:.1} g · molde+muestra {:.1} g · {:.0} cm³ · húmeda {:.1} g · \
+                         seca {:.1} g → {:.1} % · {:.3} g/cm³",
+                        point.mold_g,
+                        point.mold_plus_g,
+                        point.volume_cm3,
+                        point.wet_sample_g,
+                        point.dry_sample_g,
+                        point.moisture,
+                        point.dry_density
+                    ),
+                    "",
+                )
+            })
+            .collect();
         let calculations = vec![ReportLine::with_unit(
             "Humedad óptima",
             format!("{:.1}", peak.optimum_moisture),
             "%",
         )];
         let inputs = serde_json::json!({
-            "molde_g": self.compaction.mold.text.trim(),
-            "molde_mas_muestra_g": self.compaction.mold_plus.text.trim(),
-            "volumen_cm3": self.compaction.volume.text.trim(),
             "puntos": self.compaction.points.iter().map(|point| {
                 serde_json::json!({
+                    "molde_g": point.mold_g,
+                    "molde_mas_muestra_g": point.mold_plus_g,
+                    "volumen_cm3": point.volume_cm3,
+                    "muestra_humeda_g": point.wet_sample_g,
+                    "muestra_seca_g": point.dry_sample_g,
                     "humedad": point.moisture,
                     "densidad_seca": point.dry_density,
                 })
@@ -2328,6 +2363,22 @@ impl AppState {
             self.density.max_dry.text,
             self.density.optimum.text
         )
+    }
+
+    /// Firma de la curva de compactación: las pesadas de cada punto.
+    fn compaction_signature(&self) -> String {
+        let mut out = String::new();
+        for point in &self.compaction.points {
+            out.push_str(&format!(
+                "{}:{}:{}:{}:{}|",
+                point.mold_g,
+                point.mold_plus_g,
+                point.volume_cm3,
+                point.wet_sample_g,
+                point.dry_sample_g
+            ));
+        }
+        out
     }
 
     /// Firma de la curva de CBR.
