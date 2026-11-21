@@ -24,6 +24,11 @@ pub struct SievePass {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GranulometryOutcome {
     pub total_dry_g: f64,
+    /// Cuántos tamices sostienen la curva.
+    pub sieve_count: usize,
+    /// Algún diámetro característico cayó exactamente en un extremo de la curva, es decir,
+    /// sin intervalo de interpolación por debajo o por encima.
+    pub d_at_boundary: bool,
     /// `(abertura_mm, % que pasa)`, de grueso a fino.
     pub passing: Vec<(f64, f64)>,
     /// `(abertura_mm, % retenido acumulado)`, de grueso a fino.
@@ -72,10 +77,24 @@ pub fn sieve_analysis(total_dry_g: f64, sieves: &[SievePass]) -> Result<Granulom
     // De grueso a fino: así el acumulado se calcula en el orden correcto.
     ordered.sort_by(|a, b| b.size_mm.total_cmp(&a.size_mm));
 
+    // Dos filas con la misma abertura harían que un tamiz apareciera dos veces en la curva.
+    for pair in ordered.windows(2) {
+        if pair[0].size_mm == pair[1].size_mm {
+            return Err(CalcError::Incoherent(format!(
+                "el tamiz de {} mm está repetido",
+                pair[0].size_mm
+            )));
+        }
+    }
+
     let sum: f64 = ordered.iter().map(|s| s.retained_g).sum();
-    if sum > total_dry_g * (1.0 + 1e-9) {
+    // Tolerancia de pesada: la balanza redondea a 0,1 g y con varios tamices el redondeo se
+    // acumula. Un exceso dentro de esa tolerancia no es un dato imposible.
+    let tolerance = (total_dry_g * 0.002).max(0.1);
+    if sum > total_dry_g + tolerance {
         return Err(CalcError::Incoherent(format!(
-            "lo retenido ({sum:.1} g) no puede superar la masa seca total ({total_dry_g:.1} g)"
+            "lo retenido ({sum:.2} g) supera la masa seca total ({total_dry_g:.2} g) \
+             en más de la tolerancia de pesada ({tolerance:.2} g)"
         )));
     }
 
@@ -104,8 +123,17 @@ pub fn sieve_analysis(total_dry_g: f64, sieves: &[SievePass]) -> Result<Granulom
         _ => None,
     };
 
+    let finest = passing.last().map(|(size, _)| *size);
+    let coarsest = passing.first().map(|(size, _)| *size);
+    let d_at_boundary = [d10, d30, d60].iter().flatten().any(|value| {
+        coarsest.is_some_and(|limit| (value - limit).abs() < 1e-12)
+            || finest.is_some_and(|limit| (value - limit).abs() < 1e-12)
+    });
+
     Ok(GranulometryOutcome {
         total_dry_g,
+        sieve_count: ordered.len(),
+        d_at_boundary,
         passing,
         cumulative_retained,
         d10,
@@ -117,6 +145,10 @@ pub fn sieve_analysis(total_dry_g: f64, sieves: &[SievePass]) -> Result<Granulom
 }
 
 /// Diámetro para el que pasa un `target` por ciento, interpolando en escala logarítmica.
+///
+/// **Mesetas.** Si el porcentaje no cambia entre dos tamices (meseta), el diámetro es
+/// ambiguo; se devuelve el más fino de los dos. Es una elección, no un resultado de la
+/// geometría, y por eso está escrita aquí.
 ///
 /// La interpolación es logarítmica porque la granulometría se representa así: entre 2 mm y
 /// 0,075 mm la distancia que importa es la de las potencias de diez, no la lineal.
@@ -255,6 +287,78 @@ mod tests {
     }
 
     #[test]
+    fn la_interpolacion_es_asimetrica_y_logaritmica() {
+        // Pasa 70 % en 2 mm y 10 % en 0,425 mm. Un objetivo intermedio obliga a interpolar
+        // en el intervalo: si la interpolación fuera lineal o el parámetro estuviera
+        // invertido, estos valores no saldrían.
+        let outcome = sieve_analysis(
+            1000.0,
+            &[
+                SievePass {
+                    size_mm: 2.0,
+                    retained_g: 300.0,
+                },
+                SievePass {
+                    size_mm: 0.425,
+                    retained_g: 600.0,
+                },
+            ],
+        )
+        .unwrap();
+
+        let d60 = outcome.d60.unwrap();
+        let d30 = outcome.d30.unwrap();
+        assert!((d60 - 1.545).abs() < 0.005, "D60 = {d60}");
+        assert!((d30 - 0.712).abs() < 0.005, "D30 = {d30}");
+        assert!(d60 > d30, "el diámetro crece con el porcentaje que pasa");
+    }
+
+    #[test]
+    fn un_diametro_en_el_borde_de_la_curva_se_marca() {
+        let outcome = sieve_analysis(
+            100.0,
+            &[
+                SievePass {
+                    size_mm: 2.0,
+                    retained_g: 10.0,
+                },
+                SievePass {
+                    size_mm: 0.075,
+                    retained_g: 80.0,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(outcome.sieve_count, 2);
+        // El 10 % cae justo en el tamiz más fino: el diámetro existe, pero es el borde de
+        // la curva y así queda marcado.
+        assert!(outcome.d10.is_some());
+        assert!(outcome.d_at_boundary);
+    }
+
+    #[test]
+    fn lo_retenido_dentro_de_la_tolerancia_de_pesada_se_acepta() {
+        // 500,05 g retenidos sobre 500,0 g: es el redondeo de la balanza, no un imposible.
+        let outcome = sieve_analysis(
+            500.0,
+            &[
+                SievePass {
+                    size_mm: 4.75,
+                    retained_g: 250.1,
+                },
+                SievePass {
+                    size_mm: 2.0,
+                    retained_g: 249.95,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(outcome.sieve_count, 2);
+        // El porcentaje que pasa puede salir ligeramente negativo: se informa tal cual.
+        assert!(outcome.passing[1].1 < 0.0);
+    }
+
+    #[test]
     fn una_masa_total_nula_o_negativa_no_es_un_analisis() {
         assert!(
             sieve_analysis(
@@ -288,7 +392,7 @@ mod tests {
             }],
         )
         .unwrap_err();
-        assert!(error.to_string().contains("no puede superar"));
+        assert!(error.to_string().contains("supera la masa seca total"));
     }
 
     #[test]
@@ -318,6 +422,25 @@ mod tests {
     #[test]
     fn sin_tamices_no_hay_analisis() {
         assert!(sieve_analysis(100.0, &[]).is_err());
+    }
+
+    #[test]
+    fn un_tamiz_repetido_se_rechaza() {
+        let error = sieve_analysis(
+            100.0,
+            &[
+                SievePass {
+                    size_mm: 2.0,
+                    retained_g: 10.0,
+                },
+                SievePass {
+                    size_mm: 2.0,
+                    retained_g: 20.0,
+                },
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("repetido"));
     }
 
     #[test]

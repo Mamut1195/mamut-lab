@@ -597,6 +597,138 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         .children(test_history)
         .children(chart);
 
+    // ----------------------------------------------------- granulometría suelos
+    let sieve_rows: Vec<El> = (0..state.soils.rows.len())
+        .map(|index| {
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(
+                    TextField::new("Tamiz (mm)", &state.soils.rows[index].size)
+                        .placeholder("abertura")
+                        .on_edit(move |s: &mut AppState| &mut s.soils.rows[index].size)
+                        .build(&kit)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+                .child(
+                    TextField::new("Retenido (g)", &state.soils.rows[index].retained)
+                        .placeholder("masa")
+                        .on_edit(move |s: &mut AppState| &mut s.soils.rows[index].retained)
+                        .build(&kit)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+        })
+        .collect();
+
+    let soils_error: Option<El> = state.soils.error.as_ref().map(|message| {
+        text(format!("⚠ {message}"))
+            .key("soils-error")
+            .font(kit.ty.text_xsmall)
+            .color(kit.c.text_base)
+            .padding(4.0)
+    });
+
+    let soils_result: Option<El> = state.soils.outcome.as_ref().map(|outcome| {
+        let mut column = col().key("soils-result").w_full().gap(2.0).padding(10.0);
+        if let (Some(cu), Some(cc)) = (outcome.cu, outcome.cc) {
+            column = column.child(
+                text(format!("Cu {cu:.2} · Cc {cc:.2}"))
+                    .font(kit.ty.small)
+                    .color(kit.c.text_base),
+            );
+        }
+        let mut summary = String::from("Diámetros:");
+        for (label, value) in [
+            ("D10", outcome.d10),
+            ("D30", outcome.d30),
+            ("D60", outcome.d60),
+        ] {
+            match value {
+                Some(value) => summary.push_str(&format!(" {label} {value:.3} mm")),
+                None => summary.push_str(&format!(" {label} —")),
+            }
+        }
+        column = column.child(
+            text(summary)
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+        );
+        let lines: Vec<El> = outcome
+            .passing
+            .iter()
+            .take(12)
+            .map(|(size, passing)| {
+                text(format!("{size} mm · pasa {passing:.1} %"))
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_faint)
+            })
+            .collect();
+        column.children(lines)
+    });
+
+    let soils_panel: El = col()
+        .key("soils-panel")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .padding(12.0)
+        .gap(8.0)
+        .radius(kit.radius.md)
+        .fill(kit.c.bg_base)
+        .child(
+            text("Granulometría por tamices")
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text("Masa seca total y lo retenido en cada tamiz. Las filas vacías se ignoran.")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(field(
+                    "Muestra",
+                    "S-2026-0001",
+                    &state.soils.sample,
+                    |s: &mut AppState| &mut s.soils.sample,
+                ))
+                .child(field(
+                    "Masa seca total (g)",
+                    "1000",
+                    &state.soils.total,
+                    |s: &mut AppState| &mut s.soils.total,
+                ))
+                .child(action("add-sieve", "Añadir tamiz", |s: &mut AppState| {
+                    s.soils_add_row()
+                }))
+                .child(action(
+                    "calculate-granulometry",
+                    "Calcular",
+                    |s: &mut AppState| s.soils_calculate(),
+                )),
+        )
+        .children(sieve_rows)
+        .child(row().w_full().gap(8.0).center_y().child(action(
+            "granulometry-pdf",
+            "Informe PDF",
+            |s: &mut AppState| s.generate_granulometry_report(),
+        )))
+        .children(state.soils.report_path.as_ref().map(|path| {
+            text(format!("Informe generado en {path}"))
+                .key("granulometry-report-path")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted)
+                .padding(4.0)
+        }))
+        .children(soils_error)
+        .children(soils_result);
+
     // ------------------------------------------------ herramientas de la muestra
     let export_button = |key: &'static str, label: &'static str, format: ExportFormat| {
         el().key(key)
@@ -755,6 +887,8 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         form_panel
     } else if state.nav == Nav::Concrete {
         test_panel
+    } else if state.nav == Nav::Soils {
+        soils_panel
     } else {
         samples_body
     };

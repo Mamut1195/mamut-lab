@@ -83,58 +83,78 @@ pub fn curve_peak(points: &[CompactionPoint]) -> Option<CurvePeak> {
     if points.len() < 3 {
         return None;
     }
-    let mut ordered = points.to_vec();
-    ordered.sort_by(|a, b| a.moisture_percent.total_cmp(&b.moisture_percent));
 
-    let mut best = 0usize;
-    for (index, point) in ordered.iter().enumerate() {
-        if point.dry_density_g_cm3 > ordered[best].dry_density_g_cm3 {
-            best = index;
+    let mut x_min = f64::INFINITY;
+    let mut x_max = f64::NEG_INFINITY;
+    let mut y_max = f64::NEG_INFINITY;
+    // Sumas para las ecuaciones normales: S0..S4 de x, T0..T2 de y·x^k.
+    let mut s = [0.0_f64; 5];
+    let mut t = [0.0_f64; 3];
+
+    for point in points {
+        let x = point.moisture_percent;
+        let y = point.dry_density_g_cm3;
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        x_min = x_min.min(x);
+        x_max = x_max.max(x);
+        y_max = y_max.max(y);
+
+        let mut power = 1.0;
+        for slot in s.iter_mut() {
+            *slot += power;
+            power *= x;
+        }
+        let mut power = 1.0;
+        for slot in t.iter_mut() {
+            *slot += y * power;
+            power *= x;
         }
     }
-    // El máximo tiene que estar entre puntos, no en un extremo.
-    if best == 0 || best + 1 >= ordered.len() {
+
+    if x_max <= x_min {
         return None;
     }
 
-    let (x0, y0) = (
-        ordered[best - 1].moisture_percent,
-        ordered[best - 1].dry_density_g_cm3,
-    );
-    let (x1, y1) = (
-        ordered[best].moisture_percent,
-        ordered[best].dry_density_g_cm3,
-    );
-    let (x2, y2) = (
-        ordered[best + 1].moisture_percent,
-        ordered[best + 1].dry_density_g_cm3,
-    );
-
-    let denominator = (x0 - x1) * (x0 - x2) * (x1 - x2);
-    if denominator.abs() < f64::EPSILON {
+    // Sistema 3x3 por la regla de Cramer.
+    let det = s[4] * (s[2] * s[0] - s[1] * s[1]) - s[3] * (s[3] * s[0] - s[1] * s[2])
+        + s[2] * (s[3] * s[1] - s[2] * s[2]);
+    if det.abs() < 1e-12 || !det.is_finite() {
         return None;
     }
+    let det_a = t[2] * (s[2] * s[0] - s[1] * s[1]) - s[3] * (t[1] * s[0] - s[1] * t[0])
+        + s[2] * (t[1] * s[1] - s[2] * t[0]);
+    let det_b = s[4] * (t[1] * s[0] - s[1] * t[0]) - t[2] * (s[3] * s[0] - s[1] * s[2])
+        + s[2] * (s[3] * t[0] - t[1] * s[2]);
+    let det_c = s[4] * (s[2] * t[0] - t[1] * s[1]) - s[3] * (s[3] * t[0] - t[1] * s[2])
+        + t[2] * (s[3] * s[1] - s[2] * s[2]);
 
-    // Coeficientes del polinomio que pasa por los tres puntos.
-    let a = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denominator;
-    let b = (x2 * x2 * (y0 - y1) + x1 * x1 * (y2 - y0) + x0 * x0 * (y1 - y2)) / denominator;
-    let c = (x1 * x2 * (x1 - x2) * y0 + x2 * x0 * (x2 - x0) * y1 + x0 * x1 * (x0 - x1) * y2)
-        / denominator;
-
-    if a >= 0.0 || !a.is_finite() {
+    let a = det_a / det;
+    let b = det_b / det;
+    let c = det_c / det;
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() || a >= 0.0 {
         return None;
     }
 
     let vertex_x = -b / (2.0 * a);
-    let vertex_y = c - b * b / (4.0 * a);
+    let vertex_y = a * vertex_x * vertex_x + b * vertex_x + c;
+
     if !vertex_x.is_finite() || !vertex_y.is_finite() {
+        return None;
+    }
+    if vertex_x < x_min || vertex_x > x_max {
+        return None;
+    }
+    // El máximo no puede superar lo medido mas de un 1 %, ni quedarse por debajo.
+    if vertex_y > y_max * 1.01 || vertex_y < y_max * 0.99 {
         return None;
     }
 
     Some(CurvePeak {
         optimum_moisture_percent: vertex_x,
         max_dry_density_g_cm3: vertex_y,
-        points_used: 3,
+        points_used: points.len(),
     })
 }
 
@@ -266,5 +286,89 @@ mod tests {
         ])
         .unwrap();
         assert!(close(peak.optimum_moisture_percent, 10.333, 0.01));
+    }
+
+    #[test]
+    fn un_punto_lejano_no_infla_la_densidad_maxima() {
+        // Con (8)(10)(20) la parábola de los tres puntos situaba el máximo en 2,021 g/cm³,
+        // un 3,6 % por encima de todo lo medido. Debe rechazarse.
+        assert!(
+            curve_peak(&[
+                CompactionPoint {
+                    moisture_percent: 8.0,
+                    dry_density_g_cm3: 1.85
+                },
+                CompactionPoint {
+                    moisture_percent: 10.0,
+                    dry_density_g_cm3: 1.95
+                },
+                CompactionPoint {
+                    moisture_percent: 20.0,
+                    dry_density_g_cm3: 1.80
+                },
+            ])
+            .is_none(),
+            "un máximo por encima de lo medido no es un resultado"
+        );
+    }
+
+    #[test]
+    fn el_ajuste_usa_todos_los_puntos_y_no_solo_tres() {
+        // Cinco puntos: el ajuste por mínimos cuadrados da 12,16 % y 1,9473 g/cm³.
+        let peak = curve_peak(&[
+            CompactionPoint {
+                moisture_percent: 6.0,
+                dry_density_g_cm3: 1.80,
+            },
+            CompactionPoint {
+                moisture_percent: 8.0,
+                dry_density_g_cm3: 1.87,
+            },
+            CompactionPoint {
+                moisture_percent: 10.0,
+                dry_density_g_cm3: 1.95,
+            },
+            CompactionPoint {
+                moisture_percent: 13.0,
+                dry_density_g_cm3: 1.93,
+            },
+            CompactionPoint {
+                moisture_percent: 17.0,
+                dry_density_g_cm3: 1.86,
+            },
+        ])
+        .unwrap();
+        assert!(
+            close(peak.optimum_moisture_percent, 12.16, 0.02),
+            "humedad óptima {}",
+            peak.optimum_moisture_percent
+        );
+        assert!(
+            close(peak.max_dry_density_g_cm3, 1.9473, 0.001),
+            "densidad máxima {}",
+            peak.max_dry_density_g_cm3
+        );
+        assert_eq!(peak.points_used, 5, "todos los puntos sostienen el ajuste");
+    }
+
+    #[test]
+    fn un_valor_no_finito_no_produce_maximo() {
+        assert!(
+            curve_peak(&[
+                CompactionPoint {
+                    moisture_percent: 8.0,
+                    dry_density_g_cm3: f64::NAN
+                },
+                CompactionPoint {
+                    moisture_percent: 10.0,
+                    dry_density_g_cm3: 1.95
+                },
+                CompactionPoint {
+                    moisture_percent: 12.0,
+                    dry_density_g_cm3: 1.90
+                },
+            ])
+            .is_none()
+        );
     }
 }

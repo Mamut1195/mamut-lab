@@ -1,8 +1,11 @@
 //! `mamut-calculations` — algoritmos puros.
 //!
 //! **Nada de I/O, nada de interfaz, nada de base de datos.** Entra una estructura con
-//! magnitudes tipadas, sale otra con los resultados y las advertencias. Así se puede
-//! probar un cálculo en milisegundos y razonar sobre él sin abrir una ventana.
+//! magnitudes tipadas y sale otra con los resultados. Algunos llevan además avisos de
+//! plausibilidad ([`FieldDensity::warnings`]) o datos del ajuste que los sostiene
+//! ([`LiquidLimitFit`], `CurvePeak::points_used`): un número sin su contexto no se puede
+//! auditar. Así se puede probar un cálculo en milisegundos y razonar sobre él sin abrir una
+//! ventana.
 //!
 //! **Frontera deliberada.** Este crate calcula *magnitudes derivadas* (área, tensión,
 //! densidad, esbeltez). No decide si un resultado es aceptable: eso es conformidad, y
@@ -17,11 +20,12 @@ pub mod granulometry;
 pub mod rounding;
 
 pub use atterberg::{
-    LimitPoint, liquid_limit_multi_point, liquid_limit_one_point, plastic_limit, plasticity_index,
+    LimitPoint, LiquidLimitFit, blows_within_typical_range, liquid_limit_multi_point,
+    liquid_limit_one_point, moisture_percent, plastic_limit, plasticity_index,
 };
 pub use cbr::{
-    PenetrationPoint, STANDARD_LOAD_01_MPA, STANDARD_LOAD_02_MPA, cbr_from_curve, cbr_percent,
-    tangent_origin_offset,
+    CbrResult, MAX_PLAUSIBLE_CBR, PenetrationPoint, STANDARD_LOAD_01_MPA, STANDARD_LOAD_02_MPA,
+    cbr_from_curve, cbr_percent, tangent_origin_offset,
 };
 pub use compaction::{CompactionPoint, CurvePeak, curve_peak, dry_density, wet_density};
 pub use cylinder::{CompressionOutcome, CylinderCompressionInput, ENGINE_VERSION, calculate};

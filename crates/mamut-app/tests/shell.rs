@@ -558,7 +558,141 @@ fn la_coma_decimal_se_acepta_al_escribir() {
     );
 }
 
-// ------------------------------------------------- herramientas de la muestra ---
+// ------------------------------------------------------- granulometría (fase 3) ---
+
+#[test]
+fn la_granulometria_se_calcula_en_la_interfaz() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    rt.state.soils.total.text = "1000".to_owned();
+    // Serie por defecto: 9,5 · 4,75 · 2,0 · 0,425 · 0,075 mm.
+    for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+
+    press(&mut rt, "calculate-granulometry");
+
+    assert!(
+        rt.state.soils.error.is_none(),
+        "no debía fallar: {:?}",
+        rt.state.soils.error
+    );
+    let outcome = rt.state.soils.outcome.clone().expect("resultado");
+    assert_eq!(outcome.passing.len(), 5);
+    // 1000 g con 800 g retenidos: el 20 % pasa el tamiz de 0,075 mm.
+    assert!((outcome.passing[4].1 - 20.0).abs() < 1e-9);
+    assert!(rt.presented("soils-result").is_some());
+}
+
+#[test]
+fn una_fila_con_retenido_pero_sin_abertura_es_un_error() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    rt.state.soils.total.text = "1000".to_owned();
+    rt.state.soils.rows[0].retained.text = "100".to_owned();
+    // Retenido sin tamiz: falta el dato que da sentido a la masa.
+    rt.state.soils.rows[1].retained.text = "50".to_owned();
+    rt.state.soils.rows[1].size.text = String::new();
+
+    press(&mut rt, "calculate-granulometry");
+
+    assert!(rt.state.soils.outcome.is_none());
+    assert!(
+        rt.state
+            .soils
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("abertura"),
+        "{:?}",
+        rt.state.soils.error
+    );
+    assert!(rt.presented("soils-error").is_some(), "y se ve en pantalla");
+}
+
+#[test]
+fn sin_masa_total_la_granulometria_no_calcula() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.soils.rows[0].retained.text = "100".to_owned();
+    press(&mut rt, "calculate-granulometry");
+
+    assert!(rt.state.soils.outcome.is_none());
+    assert!(
+        rt.state
+            .soils
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("masa seca total"),
+        "{:?}",
+        rt.state.soils.error
+    );
+}
+
+#[test]
+fn se_puede_añadir_un_tamiz_mas() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    let before = rt.state.soils.rows.len();
+    press(&mut rt, "add-sieve");
+    assert_eq!(rt.state.soils.rows.len(), before + 1);
+}
+
+#[test]
+fn el_informe_granulometrico_se_genera_desde_la_interfaz() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+
+    rt.state.soils.sample.text = "S-2026-0001".to_owned();
+    rt.state.soils.total.text = "1000".to_owned();
+    for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+
+    press(&mut rt, "calculate-granulometry");
+    press(&mut rt, "granulometry-pdf");
+
+    assert!(
+        rt.state.soils.error.is_none(),
+        "no debía fallar: {:?}",
+        rt.state.soils.error
+    );
+    let path = rt
+        .state
+        .soils
+        .report_path
+        .clone()
+        .expect("se genera un archivo");
+    let bytes = std::fs::read(&path).expect("el PDF existe en disco");
+    assert!(bytes.starts_with(b"%PDF"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn sin_muestra_el_informe_granulometrico_no_se_emite() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.soils.total.text = "1000".to_owned();
+    rt.state.soils.rows[0].retained.text = "100".to_owned();
+
+    press(&mut rt, "calculate-granulometry");
+    press(&mut rt, "granulometry-pdf");
+
+    assert!(rt.state.soils.report_path.is_none());
+    assert!(
+        rt.state
+            .soils
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("muestra"),
+        "{:?}",
+        rt.state.soils.error
+    );
+}
 
 #[test]
 fn las_herramientas_exportan_adjuntan_y_anulan() {

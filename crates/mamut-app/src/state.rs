@@ -8,10 +8,15 @@
 
 use std::cell::Cell;
 
-use mamut_calculations::{CylinderCompressionInput, ENGINE_VERSION, RoundingPolicy, calculate};
+use mamut_calculations::{
+    CylinderCompressionInput, ENGINE_VERSION, RoundingPolicy, SievePass, calculate, sieve_analysis,
+};
 use mamut_core::{Actor, CivilDate, Clock, Force, Length, Mass, SystemClock, Timestamp};
 use mamut_domain::{Material, Measurement, ResultRef, Sample, SampleCode, Specimen, TestRecord};
-use mamut_reports::{LaboratoryInfo, ReportData, ReportLine, render_pdf, verdict_text};
+use mamut_reports::{
+    GranulometryReport, LaboratoryInfo, ReportData, ReportLine, render_granulometry_pdf,
+    render_pdf, verdict_text,
+};
 use mamut_standards::{Conformity, NormBody, NormRef, NormStatus, TestDescriptor};
 use mamut_validation::{PlausibilityLimits, Severity, validate_cylinder_input};
 use rune::TextEdit;
@@ -149,6 +154,63 @@ pub struct OutcomeView {
     pub conformity: String,
 }
 
+/// Una fila del formulario de granulometría.
+pub struct SieveRow {
+    pub size: TextEdit,
+    pub retained: TextEdit,
+}
+
+/// Resultado de un análisis granulométrico, listo para mostrar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoilsOutcome {
+    pub total_g: f64,
+    pub sieves: Vec<SievePass>,
+    pub passing: Vec<(f64, f64)>,
+    pub d10: Option<f64>,
+    pub d30: Option<f64>,
+    pub d60: Option<f64>,
+    pub cu: Option<f64>,
+    pub cc: Option<f64>,
+}
+
+/// Formulario de granulometría.
+pub struct SoilsForm {
+    /// Código de la muestra a la que se asocia el informe.
+    pub sample: TextEdit,
+    pub total: TextEdit,
+    pub rows: Vec<SieveRow>,
+    pub error: Option<String>,
+    pub outcome: Option<SoilsOutcome>,
+    pub report_path: Option<String>,
+}
+
+impl SoilsForm {
+    pub fn empty() -> Self {
+        let mut form = Self {
+            sample: TextEdit::new(""),
+            total: TextEdit::new(""),
+            rows: Vec::new(),
+            error: None,
+            outcome: None,
+            report_path: None,
+        };
+        // Serie habitual de tamices, con el retenido vacío.
+        for size in ["9.5", "4.75", "2.0", "0.425", "0.075"] {
+            form.rows.push(SieveRow {
+                size: TextEdit::new(size),
+                retained: TextEdit::new(""),
+            });
+        }
+        form
+    }
+}
+
+impl Default for SoilsForm {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 /// Borrador del ensayo de compresión de cilindros.
 pub struct TestForm {
     pub sample_code: TextEdit,
@@ -252,6 +314,8 @@ pub struct AppState {
     pub form_open: bool,
     /// Formulario del ensayo de compresión.
     pub test_form: TestForm,
+    /// Formulario de granulometría.
+    pub soils: SoilsForm,
     /// Historial del ensayo para la muestra escrita en el formulario.
     pub test_history: Vec<TestRow>,
     /// Descriptor del ensayo, tomado del paquete normativo al arrancar.
@@ -293,6 +357,7 @@ impl AppState {
             form: SampleForm::empty(),
             form_open: false,
             test_form: TestForm::empty(),
+            soils: SoilsForm::empty(),
             test_history: Vec::new(),
             descriptor: None,
             tool_code: TextEdit::new(""),
@@ -899,6 +964,148 @@ impl AppState {
         match store.export_samples(format) {
             Ok(path) => self.flash = Some(format!("Exportado: {}", path.display())),
             Err(message) => self.flash = Some(message),
+        }
+    }
+
+    /// Añade una fila de tamiz al formulario de granulometría.
+    pub fn soils_add_row(&mut self) {
+        self.soils.rows.push(SieveRow {
+            size: TextEdit::new(""),
+            retained: TextEdit::new(""),
+        });
+    }
+
+    /// Calcula la granulometría con lo que hay en el formulario.
+    ///
+    /// Una fila existe **cuando tiene masa retenida**: el formulario trae los tamices
+    /// habituales ya escritos y deja el retenido vacío, así que exigir ambos datos obligaría
+    /// a borrar filas antes de poder calcular. Una fila con retenido pero sin abertura sí es
+    /// un error: significa que falta el tamiz.
+    pub fn soils_calculate(&mut self) {
+        self.soils.error = None;
+        self.soils.outcome = None;
+
+        let parsed = (|| -> std::result::Result<(f64, Vec<SievePass>), String> {
+            let total = parse_number(&self.soils.total.text, "masa seca total")?;
+            let mut sieves = Vec::new();
+            for (index, row) in self.soils.rows.iter().enumerate() {
+                let size_text = row.size.text.trim();
+                let retained_text = row.retained.text.trim();
+                if retained_text.is_empty() {
+                    continue;
+                }
+                if size_text.is_empty() {
+                    return Err(format!(
+                        "la fila {} tiene masa retenida pero no abertura de tamiz",
+                        index + 1
+                    ));
+                }
+                sieves.push(SievePass {
+                    size_mm: parse_number(size_text, "abertura del tamiz")?,
+                    retained_g: parse_number(retained_text, "masa retenida")?,
+                });
+            }
+            if sieves.is_empty() {
+                return Err("no hay ningún tamiz con datos".to_owned());
+            }
+            Ok((total, sieves))
+        })();
+
+        let (total, sieves) = match parsed {
+            Ok(values) => values,
+            Err(message) => {
+                self.soils.error = Some(message);
+                return;
+            }
+        };
+
+        match sieve_analysis(total, &sieves) {
+            Ok(outcome) => {
+                let mut sorted = sieves.clone();
+                sorted.sort_by(|a, b| b.size_mm.total_cmp(&a.size_mm));
+                self.soils.outcome = Some(SoilsOutcome {
+                    total_g: total,
+                    sieves: sorted,
+                    passing: outcome.passing,
+                    d10: outcome.d10,
+                    d30: outcome.d30,
+                    d60: outcome.d60,
+                    cu: outcome.cu,
+                    cc: outcome.cc,
+                });
+                self.soils.report_path = None;
+            }
+            Err(error) => self.soils.error = Some(error.to_string()),
+        }
+    }
+
+    /// Emite el informe PDF de granulometría.
+    pub fn generate_granulometry_report(&mut self) {
+        self.soils.error = None;
+        self.soils.report_path = None;
+
+        let Some(outcome) = self.soils.outcome.clone() else {
+            self.soils.error = Some("calcula la granulometría antes de emitir el informe".into());
+            return;
+        };
+        let code = self.soils.sample.text.trim().to_owned();
+        if code.is_empty() {
+            self.soils.error = Some("indica la muestra a la que corresponde el informe".into());
+            return;
+        }
+        let Some(store) = &self.store else {
+            self.soils.error = Some("no hay almacenamiento disponible".into());
+            return;
+        };
+        let Some(laboratory) = LaboratoryInfo::new("MAMUT Lab") else {
+            self.soils.error = Some("identidad del laboratorio no configurada".into());
+            return;
+        };
+
+        let mut sieves = Vec::with_capacity(outcome.sieves.len());
+        for sieve in &outcome.sieves {
+            let passing = outcome
+                .passing
+                .iter()
+                .find(|(size, _)| (*size - sieve.size_mm).abs() < 1e-9)
+                .map(|(_, passing)| *passing)
+                .unwrap_or(0.0);
+            sieves.push((sieve.size_mm, sieve.retained_g, 100.0 - passing, passing));
+        }
+
+        let today = CivilDate::today(&SystemClock);
+        let data = GranulometryReport {
+            laboratory,
+            sample_code: code.clone(),
+            client: String::new(),
+            project: String::new(),
+            performed_on: today,
+            operator: String::new(),
+            total_dry_g: outcome.total_g,
+            sieves,
+            d10: outcome.d10,
+            d30: outcome.d30,
+            d60: outcome.d60,
+            cu: outcome.cu,
+            cc: outcome.cc,
+            norm_citation: Some("ASTM D6913 / AASHTO T 27".to_owned()),
+            observations: String::new(),
+            issued_on: today,
+            responsible: String::new(),
+        };
+
+        if let Err(message) = data.validate() {
+            self.soils.error = Some(message);
+            return;
+        }
+
+        let bytes = render_granulometry_pdf(&data);
+        match store.save_pdf(&format!("granulometria-{code}"), &bytes) {
+            Ok(path) => {
+                self.soils.report_path = Some(path.display().to_string());
+                self.flash = Some(format!("Informe de granulometría: {}", path.display()));
+            }
+            Err(message) => self.soils.error = Some(message),
         }
     }
 

@@ -6,7 +6,7 @@
 //! evaluó, el informe lo dice y no hay ninguna rama que lo convierta en «conforme».
 
 use crate::pdf::PdfDocument;
-use crate::{ReportData, verdict_text};
+use crate::{LaboratoryInfo, ReportData, verdict_text};
 
 const LEFT: f32 = 18.0;
 const RIGHT: f32 = 192.0;
@@ -243,6 +243,139 @@ pub fn render_pdf(data: &ReportData) -> Vec<u8> {
     l.doc.save()
 }
 
+/// Datos de un informe de granulometría.
+#[derive(Clone, Debug)]
+pub struct GranulometryReport {
+    pub laboratory: LaboratoryInfo,
+    pub sample_code: String,
+    pub client: String,
+    pub project: String,
+    pub performed_on: mamut_core::CivilDate,
+    pub operator: String,
+    pub total_dry_g: f64,
+    /// `(abertura_mm, retenido_g, % acumulado, % que pasa)` de grueso a fino.
+    pub sieves: Vec<(f64, f64, f64, f64)>,
+    pub d10: Option<f64>,
+    pub d30: Option<f64>,
+    pub d60: Option<f64>,
+    pub cu: Option<f64>,
+    pub cc: Option<f64>,
+    pub norm_citation: Option<String>,
+    pub observations: String,
+    pub issued_on: mamut_core::CivilDate,
+    pub responsible: String,
+}
+
+impl GranulometryReport {
+    /// Comprueba que el informe se pueda componer sin inventar nada.
+    ///
+    /// Si la suma de retenidos no cuadra con la masa total, el documento sería una
+    /// mentira ordenada: se rechaza antes de llegar al PDF.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if !self.total_dry_g.is_finite() || self.total_dry_g <= 0.0 {
+            return Err("la masa seca total debe ser positiva".to_owned());
+        }
+        if self.sieves.is_empty() {
+            return Err("un informe granulométrico necesita al menos un tamiz".to_owned());
+        }
+        let sum: f64 = self.sieves.iter().map(|(_, retained, _, _)| retained).sum();
+        if sum > self.total_dry_g * (1.0 + 1e-9) {
+            return Err(format!(
+                "lo retenido ({sum:.1} g) supera la masa total ({:.1} g)",
+                self.total_dry_g
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Genera el PDF de un informe de granulometría.
+pub fn render_granulometry_pdf(data: &GranulometryReport) -> Vec<u8> {
+    let mut l = Layout::new(
+        &format!("Granulometría {}", data.sample_code),
+        &format!("Granulometría · muestra {}", data.sample_code),
+    );
+
+    l.doc.text(LEFT, 22.0, 16.0, true, &data.laboratory.name);
+    l.doc.line(LEFT, 31.0, RIGHT, 31.0);
+    l.doc
+        .text(LEFT, 39.0, 12.5, true, "INFORME DE GRANULOMETRÍA");
+    l.y = 48.0;
+
+    l.heading("1. Identificación de la muestra");
+    l.row("Muestra", &data.sample_code);
+    l.row("Cliente", &data.client);
+    l.row("Proyecto", &data.project);
+    l.row("Fecha del ensayo", &data.performed_on.to_iso());
+
+    l.heading("2. Ensayo");
+    l.row("Masa seca total", &format!("{:.1} g", data.total_dry_g));
+    l.row(
+        "Norma",
+        data.norm_citation
+            .as_deref()
+            .unwrap_or("sin referencia normativa asociada"),
+    );
+    l.row("Operador", &data.operator);
+
+    l.heading("3. Datos originales y cálculo");
+    l.row("Tamiz (mm)", "Retenido (g) · acumulado (%) · pasa (%)");
+    for (size, retained, cumulative, passing) in &data.sieves {
+        l.row(
+            &format!("{size}"),
+            &format!("{retained:.1} · {cumulative:.1} · {passing:.1}"),
+        );
+    }
+
+    l.heading("4. Diámetros característicos");
+    for (label, value) in [("D10", data.d10), ("D30", data.d30), ("D60", data.d60)] {
+        let text = match value {
+            Some(value) => format!("{value:.3} mm"),
+            None => "no alcanzado con los tamices ensayados".to_owned(),
+        };
+        l.row(label, &text);
+    }
+    l.row("Coeficiente de uniformidad (Cu)", &format_option(data.cu));
+    l.row("Coeficiente de curvatura (Cc)", &format_option(data.cc));
+
+    l.heading("5. Observaciones");
+    if data.observations.trim().is_empty() {
+        l.paragraph("(sin observaciones)");
+    } else {
+        l.paragraph(&data.observations);
+    }
+
+    l.space(18.0);
+    l.y += 6.0;
+    l.doc.line(LEFT, l.y, LEFT + 70.0, l.y);
+    l.y += 5.0;
+    l.doc.text(
+        LEFT,
+        l.y,
+        8.5,
+        false,
+        &format!("Responsable técnico: {}", data.responsible),
+    );
+    l.y += LINE;
+    l.doc.text(
+        LEFT,
+        l.y,
+        8.5,
+        false,
+        &format!("Emitido: {}", data.issued_on),
+    );
+
+    l.footer();
+    l.doc.save()
+}
+
+fn format_option(value: Option<f64>) -> String {
+    match value {
+        Some(value) => format!("{value:.2}"),
+        None => "no calculable".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +479,59 @@ mod tests {
         );
         assert!(lines.len() > 2);
         assert!(lines.iter().all(|line| line.chars().count() <= 20));
+    }
+
+    fn granulometry() -> GranulometryReport {
+        GranulometryReport {
+            laboratory: LaboratoryInfo::new("Laboratorio Central").unwrap(),
+            sample_code: "S-2026-0001".into(),
+            client: "Constructora Andina".into(),
+            project: "Torre Norte".into(),
+            performed_on: date(),
+            operator: "Ana Torres".into(),
+            total_dry_g: 1000.0,
+            sieves: vec![
+                (4.75, 100.0, 10.0, 90.0),
+                (2.0, 200.0, 30.0, 70.0),
+                (0.425, 300.0, 60.0, 40.0),
+                (0.075, 200.0, 80.0, 20.0),
+            ],
+            d10: None,
+            d30: Some(0.18),
+            d60: Some(1.19),
+            cu: None,
+            cc: None,
+            norm_citation: Some("ASTM D6913".into()),
+            observations: String::new(),
+            issued_on: date(),
+            responsible: "Ing. Ana Torres".into(),
+        }
+    }
+
+    #[test]
+    fn el_informe_granulometrico_es_un_pdf_con_sus_datos() {
+        let data = granulometry();
+        assert!(data.validate().is_ok());
+        let bytes = render_granulometry_pdf(&data);
+        let text = text_of(&bytes);
+        assert!(bytes.starts_with(b"%PDF-1.4"));
+        assert!(text.contains("GRANULOMETR"));
+        assert!(text.contains("S-2026-0001"));
+        assert!(text.contains("1000.0 g"));
+        assert!(text.contains("D60"));
+        // Un diámetro no alcanzado no se inventa: se dice.
+        assert!(text.contains("no alcanzado"));
+        assert!(text.trim_end().ends_with("%%EOF"));
+    }
+
+    #[test]
+    fn un_informe_con_mas_retenido_que_muestra_se_rechaza() {
+        let mut data = granulometry();
+        data.sieves.push((0.05, 900.0, 170.0, -70.0));
+        assert!(data.validate().is_err());
+
+        let mut empty = granulometry();
+        empty.sieves.clear();
+        assert!(empty.validate().is_err());
     }
 }

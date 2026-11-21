@@ -55,6 +55,10 @@ pub fn round_half_away_from_zero(value: f64, decimals: u8) -> f64 {
         return value;
     }
     let scaled = value * factor;
+    // Si la escala desborda, devolver el valor tal cual es mejor que devolver infinito.
+    if !scaled.is_finite() {
+        return value;
+    }
     let rounded = if scaled >= 0.0 {
         (scaled + 0.5).floor()
     } else {

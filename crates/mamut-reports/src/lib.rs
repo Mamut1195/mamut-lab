@@ -13,7 +13,7 @@
 pub mod layout;
 pub mod pdf;
 
-pub use layout::render_pdf;
+pub use layout::{GranulometryReport, render_granulometry_pdf, render_pdf};
 pub use pdf::PdfDocument;
 
 use mamut_core::{CivilDate, ReportId};
