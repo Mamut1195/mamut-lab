@@ -984,6 +984,17 @@ fn los_cuatro_informes_de_suelos_se_generan() {
         assert!(bytes.len() > 2_000, "{stem} está vacío");
         let _ = std::fs::remove_file(&path);
     }
+
+    // Cada informe deja su ensayo y su registro con hash.
+    let store = rt.state.store.as_ref().expect("almacén");
+    let tests = store.soil_tests_for("S-2026-0001").unwrap();
+    assert_eq!(tests.len(), 4, "cuatro ensayos de suelos guardados");
+    let reports = store.reports_for("S-2026-0001").unwrap();
+    assert_eq!(reports.len(), 4, "cuatro informes registrados");
+    for report in &reports {
+        assert_eq!(report.sha256.len(), 64);
+        assert!(report.path.ends_with(".pdf"));
+    }
 }
 
 #[test]
@@ -1043,6 +1054,18 @@ fn el_informe_granulometrico_se_genera_desde_la_interfaz() {
         .expect("se genera un archivo");
     let bytes = std::fs::read(&path).expect("el PDF existe en disco");
     assert!(bytes.starts_with(b"%PDF"));
+
+    // El ensayo y el informe quedan registrados: el PDF no es la única evidencia.
+    let store = rt.state.store.as_ref().expect("almacén");
+    assert_eq!(
+        store.soil_tests_for("S-2026-0001").unwrap().len(),
+        1,
+        "el ensayo de granulometría debe guardarse"
+    );
+    let reports = store.reports_for("S-2026-0001").unwrap();
+    assert_eq!(reports.len(), 1, "el informe debe quedar registrado");
+    assert_eq!(reports[0].sha256.len(), 64);
+
     let _ = std::fs::remove_file(path);
 }
 

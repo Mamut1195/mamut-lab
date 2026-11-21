@@ -1061,6 +1061,8 @@ impl AppState {
             operator: sample.responsible.name.clone(),
             equipment: None,
             measurements: vec![
+                ReportLine::with_unit("Designación", self.test_form.designation.text.trim(), ""),
+                ReportLine::with_unit("Edad", self.test_form.age.text.trim(), "días"),
                 ReportLine::with_unit("Diámetro", self.test_form.diameter.text.trim(), "mm"),
                 ReportLine::with_unit("Altura", self.test_form.height.text.trim(), "mm"),
                 ReportLine::with_unit("Masa", self.test_form.mass.text.trim(), "g"),
@@ -1383,8 +1385,36 @@ impl AppState {
         let bytes = render_granulometry_pdf(&data);
         match store.save_pdf(&format!("granulometria-{code}"), &bytes) {
             Ok(path) => {
-                self.soils.report_path = Some(path.display().to_string());
-                self.flash = Some(format!("Informe de granulometría: {}", path.display()));
+                let shown = path.display().to_string();
+                let inputs = serde_json::json!({
+                    "total_g": outcome.total_g,
+                    "tamices": outcome.sieves.iter().map(|sieve| {
+                        serde_json::json!({
+                            "abertura_mm": sieve.size_mm,
+                            "retenido_g": sieve.retained_g,
+                        })
+                    }).collect::<Vec<_>>(),
+                })
+                .to_string();
+                let headline = outcome.d60.unwrap_or(0.0);
+                match self.register_emission(
+                    "granulometria",
+                    "SOIL-GRANULOMETRIA",
+                    &inputs,
+                    headline,
+                    "mm",
+                    &shown,
+                ) {
+                    Ok(()) => {
+                        self.soils.report_path = Some(shown.clone());
+                        self.flash = Some(format!("Informe de granulometría: {shown}"));
+                    }
+                    Err(message) => {
+                        self.soils.error = Some(format!(
+                            "informe emitido en {shown}, pero no quedó registrado: {message}"
+                        ));
+                    }
+                }
             }
             Err(message) => self.soils.error = Some(message),
         }
@@ -1684,6 +1714,47 @@ impl AppState {
         self.compaction.error = None;
     }
 
+    /// Guarda el ensayo de suelos y registra el PDF emitido, con su hash.
+    ///
+    /// Se hace **después** de escribir el PDF porque el registro incluye su SHA-256. Si el
+    /// registro falla, el archivo existe pero queda sin constancia: el aviso lo dice en vez
+    /// de fingir que todo fue bien.
+    fn register_emission(
+        &self,
+        kind: &'static str,
+        descriptor: &'static str,
+        inputs_json: &str,
+        result_value: f64,
+        result_unit: &'static str,
+        path: &str,
+    ) -> std::result::Result<(), String> {
+        let Some(store) = &self.store else {
+            return Err("no hay almacenamiento disponible".to_owned());
+        };
+        let code = self.soils.sample.text.trim().to_owned();
+        let actor = Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio")
+            .map_err(|error| error.to_string())?;
+        let now = SystemClock.now();
+        let performed_on = CivilDate::today(&SystemClock).to_iso();
+
+        let test_id = store.save_soil_test(crate::store::SoilTestDraft {
+            code: &code,
+            kind,
+            descriptor,
+            inputs_json,
+            result_value,
+            result_unit,
+            performed_on: &performed_on,
+            actor: &actor,
+            at: now,
+        })?;
+
+        let file = std::path::Path::new(path);
+        let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+        store.save_report(&code, kind, &test_id, file, &bytes, &actor, now)?;
+        Ok(())
+    }
+
     /// Comprueba que la muestra existe, no está anulada y es la misma para la que se calculó.
     ///
     /// Un informe identifica una muestra concreta: emitirlo para otra, para una anulada o
@@ -1831,6 +1902,15 @@ impl AppState {
                 "",
             ));
         }
+        let inputs = serde_json::json!({
+            "determinaciones": outcome.points.iter().map(|(blows, moisture)| {
+                serde_json::json!({ "golpes": blows, "humedad": moisture })
+            }).collect::<Vec<_>>(),
+            "agua_g": self.limits.water.text.trim(),
+            "seca_g": self.limits.dry.text.trim(),
+            "tara_g": self.limits.tare.text.trim(),
+        })
+        .to_string();
         match self.emit_soils_report(
             "atterberg",
             "Límites de Atterberg",
@@ -1844,7 +1924,23 @@ impl AppState {
                 "%",
             ),
         ) {
-            Ok(path) => self.flash = Some(format!("Informe de Atterberg: {path}")),
+            Ok(path) => {
+                match self.register_emission(
+                    "atterberg",
+                    "SOIL-ATTERBERG",
+                    &inputs,
+                    outcome.liquid_limit,
+                    "%",
+                    &path,
+                ) {
+                    Ok(()) => self.flash = Some(format!("Informe de Atterberg: {path}")),
+                    Err(message) => {
+                        self.limits.error = Some(format!(
+                            "informe emitido en {path}, pero no quedó registrado: {message}"
+                        ))
+                    }
+                }
+            }
             Err(message) => self.limits.error = Some(message),
         }
     }
@@ -1855,23 +1951,49 @@ impl AppState {
             self.compaction.error = Some("calcula el máximo antes de emitir el informe".into());
             return;
         };
-        let points: Vec<ReportLine> = self
-            .compaction
-            .points
-            .iter()
-            .map(|point| {
-                ReportLine::with_unit(
-                    format!("Punto a {:.1} %", point.moisture),
-                    format!("{:.3}", point.dry_density),
-                    "g/cm³",
-                )
-            })
-            .collect();
+        let mut points: Vec<ReportLine> = vec![
+            ReportLine::with_unit("Masa del molde", self.compaction.mold.text.trim(), "g"),
+            ReportLine::with_unit(
+                "Molde con muestra",
+                self.compaction.mold_plus.text.trim(),
+                "g",
+            ),
+            ReportLine::with_unit(
+                "Volumen del molde",
+                self.compaction.volume.text.trim(),
+                "cm³",
+            ),
+        ];
+        points.extend(
+            self.compaction
+                .points
+                .iter()
+                .map(|point| {
+                    ReportLine::with_unit(
+                        format!("Punto a {:.1} %", point.moisture),
+                        format!("{:.3}", point.dry_density),
+                        "g/cm³",
+                    )
+                })
+                .collect::<Vec<ReportLine>>(),
+        );
         let calculations = vec![ReportLine::with_unit(
             "Humedad óptima",
             format!("{:.1}", peak.optimum_moisture),
             "%",
         )];
+        let inputs = serde_json::json!({
+            "molde_g": self.compaction.mold.text.trim(),
+            "molde_mas_muestra_g": self.compaction.mold_plus.text.trim(),
+            "volumen_cm3": self.compaction.volume.text.trim(),
+            "puntos": self.compaction.points.iter().map(|point| {
+                serde_json::json!({
+                    "humedad": point.moisture,
+                    "densidad_seca": point.dry_density,
+                })
+            }).collect::<Vec<_>>(),
+        })
+        .to_string();
         match self.emit_soils_report(
             "compactacion",
             "Compactación de laboratorio",
@@ -1885,7 +2007,21 @@ impl AppState {
                 "g/cm³",
             ),
         ) {
-            Ok(path) => self.flash = Some(format!("Informe de compactación: {path}")),
+            Ok(path) => match self.register_emission(
+                "compactacion",
+                "SOIL-COMPACTACION",
+                &inputs,
+                peak.max_dry_density,
+                "g/cm³",
+                &path,
+            ) {
+                Ok(()) => self.flash = Some(format!("Informe de compactación: {path}")),
+                Err(message) => {
+                    self.compaction.error = Some(format!(
+                        "informe emitido en {path}, pero no quedó registrado: {message}"
+                    ))
+                }
+            },
             Err(message) => self.compaction.error = Some(message),
         }
     }
@@ -1925,6 +2061,14 @@ impl AppState {
                 "mm",
             ),
         ];
+        let inputs = serde_json::json!({
+            "curva": outcome.points.iter().map(|(penetration, load)| {
+                serde_json::json!({ "penetracion_mm": penetration, "carga_mpa": load })
+            }).collect::<Vec<_>>(),
+            "penetracion_gobernante_mm": outcome.governing_penetration,
+            "corrimiento_mm": outcome.offset,
+        })
+        .to_string();
         match self.emit_soils_report(
             "cbr",
             "California Bearing Ratio",
@@ -1934,7 +2078,21 @@ impl AppState {
             calculations,
             ReportLine::with_unit("CBR", format!("{:.1}", outcome.percent), "%"),
         ) {
-            Ok(path) => self.flash = Some(format!("Informe de CBR: {path}")),
+            Ok(path) => match self.register_emission(
+                "cbr",
+                "SOIL-CBR",
+                &inputs,
+                outcome.percent,
+                "%",
+                &path,
+            ) {
+                Ok(()) => self.flash = Some(format!("Informe de CBR: {path}")),
+                Err(message) => {
+                    self.cbr.error = Some(format!(
+                        "informe emitido en {path}, pero no quedó registrado: {message}"
+                    ))
+                }
+            },
             Err(message) => self.cbr.error = Some(message),
         }
     }
@@ -1955,6 +2113,18 @@ impl AppState {
         let measurements = vec![
             ReportLine::with_unit("Densidad húmeda", self.density.wet.text.trim(), "g/cm³"),
             ReportLine::with_unit("Humedad en sitio", self.density.moisture.text.trim(), "%"),
+            // Sin la referencia de laboratorio, el grado de compactación no se puede
+            // reproducir ni auditar.
+            ReportLine::with_unit(
+                "Densidad seca máxima (laboratorio)",
+                self.density.max_dry.text.trim(),
+                "g/cm³",
+            ),
+            ReportLine::with_unit(
+                "Humedad óptima (laboratorio)",
+                self.density.optimum.text.trim(),
+                "%",
+            ),
         ];
         let calculations = vec![
             ReportLine::with_unit(
@@ -1968,6 +2138,13 @@ impl AppState {
                 "puntos",
             ),
         ];
+        let inputs = serde_json::json!({
+            "densidad_humeda": self.density.wet.text.trim(),
+            "humedad": self.density.moisture.text.trim(),
+            "densidad_maxima": self.density.max_dry.text.trim(),
+            "humedad_optima": self.density.optimum.text.trim(),
+        })
+        .to_string();
         match self.emit_soils_report(
             "densidad",
             "Densidad en sitio",
@@ -1981,7 +2158,21 @@ impl AppState {
                 "%",
             ),
         ) {
-            Ok(path) => self.flash = Some(format!("Informe de densidad: {path}")),
+            Ok(path) => match self.register_emission(
+                "densidad",
+                "SOIL-DENSIDAD",
+                &inputs,
+                outcome.relative_compaction,
+                "%",
+                &path,
+            ) {
+                Ok(()) => self.flash = Some(format!("Informe de densidad: {path}")),
+                Err(message) => {
+                    self.density.error = Some(format!(
+                        "informe emitido en {path}, pero no quedó registrado: {message}"
+                    ))
+                }
+            },
             Err(message) => self.density.error = Some(message),
         }
     }
