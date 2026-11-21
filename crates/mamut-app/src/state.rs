@@ -313,6 +313,8 @@ pub struct DensityOutcome {
 
 /// Formulario de densidad en sitio.
 pub struct DensityForm {
+    /// Método con el que se midió la densidad en sitio: el cálculo no puede confundirlos.
+    pub method: TextEdit,
     pub wet: TextEdit,
     pub moisture: TextEdit,
     pub max_dry: TextEdit,
@@ -326,6 +328,7 @@ pub struct DensityForm {
 impl DensityForm {
     pub fn empty() -> Self {
         Self {
+            method: TextEdit::new("nuclear"),
             wet: TextEdit::new(""),
             moisture: TextEdit::new(""),
             max_dry: TextEdit::new(""),
@@ -1448,7 +1451,11 @@ impl AppState {
             d60: outcome.d60,
             cu: outcome.cu,
             cc: outcome.cc,
-            norm_citation: Some("ASTM D6913 / AASHTO T 27".to_owned()),
+            norm_citation: Some(
+                "Procedimiento TexDOT Tex-110-E (abril 2024) — equivalencia ASTM D6913 / \
+                 AASHTO T 27 pendiente de verificar"
+                    .to_owned(),
+            ),
             observations: String::new(),
             issued_on: today,
             responsible: sample.responsible.name.clone(),
@@ -1879,7 +1886,7 @@ impl AppState {
         &mut self,
         file_stem: &str,
         test_name: &str,
-        norm: (&str, u16, &str),
+        citation: &str,
         outcome_sample: &str,
         measurements: Vec<ReportLine>,
         calculations: Vec<ReportLine>,
@@ -1894,11 +1901,15 @@ impl AppState {
             return Err("identidad del laboratorio no configurada".to_owned());
         };
         let today = CivilDate::today(&SystemClock);
+        // La referencia sirve para el veredicto: sin especificación no hay juicio. Lo que se
+        // imprime como «Norma» es el procedimiento que se usó de verdad, con su edición;
+        // citar una edición de ASTM no verificada sería inventar un dato en un documento
+        // que se firma.
         let norm_ref = NormRef::new(
-            NormBody::Astm,
-            norm.0,
-            norm.1,
-            norm.2,
+            NormBody::Internal,
+            "PENDIENTE",
+            1,
+            "verificación normativa pendiente",
             NormStatus::PendingReview,
         )
         .map_err(|error| error.to_string())?;
@@ -1911,7 +1922,7 @@ impl AppState {
             received_on: sample.received_on,
             test_name: test_name.to_owned(),
             method_label: "Normativo".to_owned(),
-            norm_citation: Some(norm_ref.citation()),
+            norm_citation: Some(citation.to_owned()),
             performed_on: today,
             operator: sample.responsible.name.clone(),
             equipment: None,
@@ -1992,7 +2003,7 @@ impl AppState {
         match self.emit_soils_report(
             "atterberg",
             "Límites de Atterberg",
-            ("D4318", 2024, "Límites líquido y plástico"),
+            "Procedimiento TexDOT Tex-104-E / Tex-105-E (abril 2024) —              equivalencia ASTM D4318 pendiente de verificar",
             &outcome.sample,
             measurements,
             calculations,
@@ -2076,7 +2087,7 @@ impl AppState {
         match self.emit_soils_report(
             "compactacion",
             "Compactación de laboratorio",
-            ("D698", 2024, "Ensayo de compactación"),
+            "Procedimiento TexDOT Tex-113-E (enero 2025) / Tex-114-E —              equivalencia ASTM D698/D1557 pendiente de verificar",
             &peak.sample,
             points,
             calculations,
@@ -2152,7 +2163,7 @@ impl AppState {
         match self.emit_soils_report(
             "cbr",
             "California Bearing Ratio",
-            ("D1883", 2024, "CBR de suelos compactados"),
+            "Procedimiento ODOT T-193 (mayo 2024) sobre las cargas estándar de              ASTM D1883 — verificación de la norma pendiente",
             &outcome.sample,
             measurements,
             calculations,
@@ -2192,6 +2203,11 @@ impl AppState {
         }
 
         let measurements = vec![
+            ReportLine::with_unit(
+                "Método de determinación",
+                self.density.method.text.trim(),
+                "",
+            ),
             ReportLine::with_unit("Densidad húmeda", self.density.wet.text.trim(), "g/cm³"),
             ReportLine::with_unit("Humedad en sitio", self.density.moisture.text.trim(), "%"),
             // Sin la referencia de laboratorio, el grado de compactación no se puede
@@ -2220,6 +2236,7 @@ impl AppState {
             ),
         ];
         let inputs = serde_json::json!({
+            "metodo": self.density.method.text.trim(),
             "densidad_humeda": self.density.wet.text.trim(),
             "humedad": self.density.moisture.text.trim(),
             "densidad_maxima": self.density.max_dry.text.trim(),
@@ -2229,7 +2246,7 @@ impl AppState {
         match self.emit_soils_report(
             "densidad",
             "Densidad en sitio",
-            ("D6938", 2024, "Densidad y humedad en sitio"),
+            "Procedimiento TexDOT Tex-115-E (enero 2025) — equivalencia ASTM D6938/D1556              pendiente de verificar",
             &outcome.sample,
             measurements,
             calculations,

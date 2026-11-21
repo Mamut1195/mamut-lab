@@ -940,6 +940,12 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                 .w_full()
                 .gap(8.0)
                 .child(field(
+                    "Método (nuclear/cono)",
+                    "nuclear",
+                    &state.density.method,
+                    |s: &mut AppState| &mut s.density.method,
+                ))
+                .child(field(
                     "Densidad húmeda (g/cm³)",
                     "2.12",
                     &state.density.wet,
