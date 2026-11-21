@@ -76,8 +76,8 @@ densidad seca con la humedad y el vértice de la curva.
 | **Granulometría** | Cálculo, pantalla e informe PDF hechos |
 | **Límites de Atterberg** | Cálculo, pantalla e informe hechos |
 | **Compactación** | Cálculo, pantalla e informe hechos |
-| Interfaz de los ensayos de suelos | Pendiente: el cálculo existe; falta el espacio de trabajo como el de compresión |
-| Sección de suelos en el informe PDF | Pendiente |
+| Interfaz de los ensayos de suelos | Hecha: un panel con los cinco ensayos |
+| Sección de suelos en el informe PDF | Hecha: un informe por ensayo |
 | Gráfico granulométrico semilogarítmico | La geometría existe (`Scale::Log10`); falta montarlo |
 
 ## Siguiente

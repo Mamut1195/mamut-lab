@@ -105,8 +105,8 @@ referencias públicas —granulometría con D10/D30/D60, Cu y Cc; límites de At
 de plasticidad; compactación con densidad seca y máximo de la curva—. 44 pruebas en el
 crate de cálculos. Acta en [`docs/fase-3/00-inicio.md`](../fase-3/00-inicio.md).
 
-Pendiente: clasificación SUCS/AASHTO (requiere la norma), CBR (lo encontrado es LBR),
-interfaz de los ensayos y su sección de informe.
+Pendiente: clasificación SUCS/AASHTO, corrección del tamiz de 200 y energías de
+compactación (requieren la norma). Interfaz e informes de los cinco ensayos, hechos.
 
 Granulometría (D6913/D2487), límites líquido y plástico (D4318), índice de
 plasticidad, clasificación SUCS y AASHTO (D2487/D3282), Proctor estándar y modificado

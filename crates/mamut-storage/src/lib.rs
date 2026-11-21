@@ -287,6 +287,9 @@ mod tests {
             "result",
             "equipment",
             "audit",
+            "attachment",
+            "soil_test",
+            "report",
             "schema_version",
         ] {
             let count: i64 = db

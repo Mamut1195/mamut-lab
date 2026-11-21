@@ -127,7 +127,7 @@ fn los_pragmas_de_proteccion_estan_activos() {
 }
 
 #[test]
-fn existen_los_seis_disparadores_de_inmutabilidad() {
+fn existen_los_disparadores_de_inmutabilidad() {
     let db = db();
     let mut names: Vec<String> = db
         .connection()
@@ -145,6 +145,12 @@ fn existen_los_seis_disparadores_de_inmutabilidad() {
         "measurement_no_update",
         "result_no_delete",
         "result_no_update",
+        // v6: un ensayo de suelos guardado no se modifica ni se borra, y un informe
+        // emitido es un documento entregado.
+        "soil_test_no_delete",
+        "soil_test_no_update",
+        "report_no_delete",
+        "report_no_update",
     ] {
         assert!(
             names.iter().any(|n| n == expected),

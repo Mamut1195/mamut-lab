@@ -1735,7 +1735,10 @@ impl AppState {
                     dry_density: dry,
                 });
                 self.compaction.peak = None;
-                // Se limpian las masas de la muestra para el siguiente punto, no el molde.
+                // Se limpian las masas de la muestra **y** la del molde con muestra: si se
+                // reutiliza la del punto anterior, el siguiente entra en la curva con una
+                // pesada que no se tomó. El molde y el volumen sí se conservan.
+                self.compaction.mold_plus = TextEdit::new("");
                 self.compaction.wet_sample = TextEdit::new("");
                 self.compaction.dry_sample = TextEdit::new("");
                 self.flash = Some(format!("Punto añadido: {moisture:.1} % · {dry:.3} g/cm³"));
@@ -1772,8 +1775,9 @@ impl AppState {
             }
             None => {
                 self.compaction.error = Some(
-                    "los puntos no definen un máximo defendible: hacen falta al menos tres y \
-                     que la curva suba y baje dentro del rango ensayado"
+                    "los puntos no definen un máximo defendible: pueden ser menos de tres, \
+                     no describir una curva que suba y baje, o quedar el ajuste fuera del \
+                     rango ensayado"
                         .to_owned(),
                 );
             }
@@ -2497,9 +2501,11 @@ impl AppState {
                     .iter()
                     .map(|report| {
                         format!(
-                            "{} · {} · {} · {}",
+                            "{} · sobre {} · {} · emitido por {} · {} · {}",
                             report.kind,
+                            &report.subject[..8.min(report.subject.len())],
                             report.issued_at,
+                            report.issued_by,
                             &report.sha256[..12],
                             report.path
                         )
