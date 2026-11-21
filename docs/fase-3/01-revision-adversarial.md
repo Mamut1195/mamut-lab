@@ -135,3 +135,31 @@ cargo test --workspace   → 378 pruebas, 0 fallos
 cerrados, y ningún defecto pendiente que impida cablear estos módulos a informes. La
 clasificación SUCS/AASHTO sigue fuera: no es un fallo de la revisión, es una fuente que no
 existe.
+
+---
+
+# Revisión adversarial de la integración (app, estado, informes)
+
+**Fecha:** 2026-11-21 · **Revisor:** segundo agente independiente · **Veredicto:** RECHAZADO
+
+El motor de cálculo quedó aprobado; la revisión se centró en lo que ocurre entre el
+formulario y el PDF. Encontró **5 bloqueantes y 11 graves**. Los bloqueantes eran reales:
+
+| # | Fallo | Estado |
+| --- | --- | --- |
+| B1 | Guardar un ensayo cuyas mediciones contradicen el resultado (editar tras calcular) | Corregido: guardas de frescura |
+| B2 | Emitir el informe con datos de otra muestra | Corregido: la muestra se captura al calcular |
+| B3 | Resultados de suelos que sobreviven al cambio de muestra | Corregido: cada resultado recuerda su muestra |
+| B4 | Informe granulométrico con cliente y responsable vacíos | Corregido: se toma de la muestra |
+| B5 | Informes de muestras inexistentes, con fecha de recepción inventada | Corregido: se exige muestra registrada y no anulada |
+
+También corregidos en esta ronda: la coma decimal que calculaba pero no se podía guardar
+(G10), la anulación que no bloqueaba nuevos ensayos (G13), la escritura de informes con
+ventana de sobrescritura (G15) y el adjunto sin límite de tamaño (G16).
+
+**Pendiente de la segunda ronda:** datos originales incompletos en los informes (G6), la
+emisión del informe sin registro ni auditoría (G7), los ensayos de suelos que no se
+persisten (G8), los guardados no atómicos (G9) y las herramientas de muestra (G12).
+
+Lo que este episodio demuestra: **un cálculo correcto no hace un producto correcto.** El
+motor pasaba sus pruebas y aun así se podía firmar un PDF con el responsable en blanco.
