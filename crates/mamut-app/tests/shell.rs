@@ -1572,3 +1572,22 @@ fn el_ensayo_guardado_se_puede_releer_con_sus_datos_y_su_autor() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].issued_by, "ana");
 }
+
+#[test]
+fn la_granulometria_dibuja_la_curva_semilogaritmica() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0090".to_owned();
+    rt.state.soils.total.text = "1000".to_owned();
+    for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+
+    press(&mut rt, "calculate-granulometry");
+
+    assert!(rt.state.soils.outcome.is_some());
+    assert!(
+        rt.presented("granulometry-chart").is_some(),
+        "la curva granulométrica debe dibujarse con el resultado"
+    );
+}

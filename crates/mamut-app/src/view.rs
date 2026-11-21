@@ -13,6 +13,51 @@ use rune_kit::{Cell, Kit, SortDir, Table, TableColumn, TextField};
 use crate::state::{AppState, Nav, SampleRow};
 use crate::store::ExportFormat;
 
+/// Curva granulométrica en escala semilogarítmica.
+///
+/// El eje de aberturas es logarítmico porque así se lee una granulometría: la distancia
+/// entre 2 mm y 0,2 mm tiene que ser la misma que entre 0,2 y 0,02. La geometría la calcula
+/// `mamut-charts`; aquí solo se convierte en un trazo.
+fn granulometry_shape(
+    passing: &[(f64, f64)],
+    width: f32,
+    height: f32,
+    color: rune::Color,
+) -> Shape {
+    if passing.len() < 2 {
+        return Shape::new();
+    }
+    // De fino a grueso: el eje x crece hacia la derecha.
+    let mut points: Vec<(f64, f64)> = passing
+        .iter()
+        .map(|(size, value)| (*size, *value))
+        .collect();
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let x_min = points.first().map(|p| p.0).unwrap_or(0.0);
+    let x_max = points.last().map(|p| p.0).unwrap_or(0.0);
+    if x_min <= 0.0 || x_max <= x_min {
+        return Shape::new();
+    }
+
+    let spec = LineChartSpec {
+        points: &points,
+        plot: Rect::new(0.0, 0.0, width, height),
+        x: Scale::Log10 {
+            min: x_min,
+            max: x_max,
+        },
+        y: Scale::Linear {
+            min: 0.0,
+            max: 100.0,
+        },
+        x_ticks: Vec::new(),
+        y_ticks: vec![0.0, 25.0, 50.0, 75.0, 100.0],
+        limits: Vec::new(),
+    };
+    Shape::new().stroke(line_chart(&spec).line, 1.5, color)
+}
+
 /// Serie resistencia–edad como polilínea, para el gráfico del ensayo.
 ///
 /// La geometría la calcula `mamut-charts` (probada sin ventana); aquí solo se convierte
@@ -899,6 +944,21 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         }))
         .children(soils_error)
         .children(soils_result)
+        .children(state.soils.outcome.as_ref().map(|outcome| {
+            el()
+                .key("granulometry-chart")
+                .w_full()
+                .h(160.0)
+                .padding(8.0)
+                .radius(kit.radius.sm)
+                .fill(kit.c.bg_deep)
+                .shape(granulometry_shape(
+                    &outcome.passing,
+                    900.0,
+                    140.0,
+                    rune::tok::accent(0, dark),
+                ))
+        }))
         .child(el().w_full().h(1.0).fill(kit.c.layer_02))
         .child(
             text("Límites de Atterberg")
