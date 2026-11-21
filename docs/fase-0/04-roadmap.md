@@ -98,7 +98,15 @@ configuración, no desarrollo. Ver `06-normas-sin-bloqueo.md`.
 
 ---
 
-## Fase 3 · Suelos — 6–8 semanas
+## Fase 3 · Suelos — 6–8 semanas · **EN CURSO**
+
+**Incremento 1 completado (2026-11-21):** núcleo de cálculo con las ecuaciones de las
+referencias públicas —granulometría con D10/D30/D60, Cu y Cc; límites de Atterberg e índice
+de plasticidad; compactación con densidad seca y máximo de la curva—. 44 pruebas en el
+crate de cálculos. Acta en [`docs/fase-3/00-inicio.md`](../fase-3/00-inicio.md).
+
+Pendiente: clasificación SUCS/AASHTO (requiere la norma), CBR (lo encontrado es LBR),
+interfaz de los ensayos y su sección de informe.
 
 Granulometría (D6913/D2487), límites líquido y plástico (D4318), índice de
 plasticidad, clasificación SUCS y AASHTO (D2487/D3282), Proctor estándar y modificado
