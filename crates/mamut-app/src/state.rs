@@ -566,6 +566,8 @@ pub struct AppState {
     pub attachments: Vec<String>,
     /// Serie resistencia–edad de esa muestra.
     pub series: Vec<(u32, f64)>,
+    /// Muestra cuya anulación está a la espera de confirmación.
+    pub pending_void: Option<String>,
     /// Mensaje efímero tras una acción correcta.
     pub flash: Option<String>,
 }
@@ -605,6 +607,7 @@ impl AppState {
             tool_reason: TextEdit::new(""),
             attachments: Vec::new(),
             series: Vec::new(),
+            pending_void: None,
             flash: None,
         }
     }
@@ -977,7 +980,8 @@ impl AppState {
                 self.test_form.saved = Some(test_id);
                 self.flash = Some(format!("Ensayo guardado para la muestra {code}"));
                 self.load_test_history();
-                // Las herramientas (adjuntos y gráfico) siguen a la muestra ensayada.
+                // Las herramientas siguen a la muestra ensayada. El código se rellena para
+                // la lectura (adjuntos y gráfico); anular exige confirmación aparte.
                 self.tool_code = TextEdit::new(code);
                 self.load_tools();
                 self.reload();
@@ -1094,8 +1098,31 @@ impl AppState {
         let bytes = render_pdf(&data);
         match store.save_pdf(&format!("informe-{code}"), &bytes) {
             Ok(path) => {
-                self.test_form.report_path = Some(path.display().to_string());
-                self.flash = Some(format!("Informe generado: {}", path.display()));
+                let shown = path.display().to_string();
+                let test_id = self.test_form.saved.clone().unwrap_or_default();
+
+                // El informe deja constancia: registro con hash y ensayo en estado informado.
+                let registration = (|| -> crate::store::StoreResult<()> {
+                    let actor = Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio")
+                        .map_err(|error| error.to_string())?;
+                    let at = SystemClock.now();
+                    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+                    store.save_report(&code, "compresion", &test_id, &path, &bytes, &actor, at)?;
+                    store.mark_test_reported(&test_id, &shown, &actor, at)?;
+                    Ok(())
+                })();
+
+                match registration {
+                    Ok(()) => {
+                        self.test_form.report_path = Some(shown.clone());
+                        self.flash = Some(format!("Informe generado: {shown}"));
+                    }
+                    Err(message) => {
+                        self.test_form.error = Some(format!(
+                            "informe emitido en {shown}, pero no quedó registrado: {message}"
+                        ));
+                    }
+                }
             }
             Err(message) => self.test_form.error = Some(message),
         }
@@ -1206,6 +1233,15 @@ impl AppState {
             self.flash = Some("la anulación exige un motivo".to_owned());
             return;
         }
+        // Anular no se deshace: exige un segundo clic sobre la misma muestra.
+        if self.pending_void.as_deref() != Some(code.as_str()) {
+            self.pending_void = Some(code.clone());
+            self.flash = Some(format!(
+                "¿Anular «{code}»? Vuelve a pulsar «Anular» para confirmarlo"
+            ));
+            return;
+        }
+        self.pending_void = None;
         let Some(store) = &self.store else {
             self.flash = Some("no hay almacenamiento disponible".to_owned());
             return;
@@ -1217,6 +1253,8 @@ impl AppState {
         match store.void_sample(&code, &actor, SystemClock.now(), &reason) {
             Ok(()) => {
                 self.flash = Some(format!("Muestra {code} anulada"));
+                // El motivo no se reutiliza para otra muestra.
+                self.tool_reason = TextEdit::new("");
                 self.reload();
                 self.load_tools();
             }

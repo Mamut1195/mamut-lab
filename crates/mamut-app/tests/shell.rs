@@ -1127,6 +1127,15 @@ fn las_herramientas_exportan_adjuntan_y_anulan() {
     assert!(rt.presented("attachments").is_some());
 
     rt.state.tool_reason.text = "muestra duplicada".to_owned();
+    // Anular no se deshace: el primer clic pide confirmación y no anula nada.
+    press(&mut rt, "void-sample");
+    assert!(rt.state.pending_void.is_some(), "debe pedir confirmación");
+    assert!(
+        !rt.state.rows.iter().any(|row| row.state == "Anulada"),
+        "el primer clic no anula"
+    );
+
+    // El segundo clic, sobre la misma muestra, sí anula.
     press(&mut rt, "void-sample");
 
     assert!(
@@ -1300,5 +1309,42 @@ fn un_informe_de_una_muestra_no_registrada_se_rechaza() {
             .contains("no existe"),
         "{:?}",
         rt.state.soils.error
+    );
+}
+
+#[test]
+fn el_informe_de_compresion_registra_el_ensayo_y_lo_marca_informado() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0050");
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0050");
+
+    press(&mut rt, "calculate-test");
+    press(&mut rt, "save-test");
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "{:?}",
+        rt.state.test_form.error
+    );
+
+    press(&mut rt, "report-pdf");
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "el informe no debía fallar: {:?}",
+        rt.state.test_form.error
+    );
+
+    let store = rt.state.store.as_ref().expect("almacén");
+    let reports = store.reports_for("H-2026-0050").unwrap();
+    assert_eq!(reports.len(), 1, "el informe queda registrado");
+    assert_eq!(reports[0].kind, "compresion");
+    assert_eq!(reports[0].sha256.len(), 64);
+
+    let tests = store.tests_for_sample("H-2026-0050").unwrap();
+    assert_eq!(tests.len(), 1);
+    assert_eq!(
+        tests[0].state,
+        mamut_domain::TestState::Reported,
+        "el ensayo pasa a informado"
     );
 }

@@ -173,36 +173,56 @@ impl Store {
         registered.register(None).map_err(display)?;
         registered.set_result(result.clone()).map_err(display)?;
 
-        self.db.specimens().insert(specimen).map_err(display)?;
-        self.db.tests().insert(&registered).map_err(display)?;
-        for measurement in measurements {
-            self.db
-                .measurements()
-                .insert(registered.id, measurement)
-                .map_err(display)?;
-        }
-        self.db
-            .results()
-            .insert(registered.id, result)
-            .map_err(display)?;
-        self.db
-            .tests()
-            .update_state(
-                registered.id,
-                mamut_domain::TestState::Calculated,
-                registered.revision,
-            )
-            .map_err(display)?;
+        // Una sola transacción: o queda el ensayo completo con su auditoría, o no queda
+        // nada. Antes, un fallo al auditar dejaba el espécimen y el resultado escritos y el
+        // usuario veía «no se pudo guardar».
+        self.db.execute_raw("BEGIN IMMEDIATE").map_err(display)?;
 
-        for (entity, id, action) in [
-            ("specimen", specimen.id.to_string(), AuditAction::Created),
-            ("test", registered.id.to_string(), AuditAction::Created),
-            ("result", registered.id.to_string(), AuditAction::Calculated),
-        ] {
-            let entry = AuditEntry::new(at, actor.clone(), entity, id, action).map_err(display)?;
-            self.db.audit().append(&entry).map_err(display)?;
+        let writes = (|| -> StoreResult<()> {
+            self.db.specimens().insert(specimen).map_err(display)?;
+            self.db.tests().insert(&registered).map_err(display)?;
+            for measurement in measurements {
+                self.db
+                    .measurements()
+                    .insert(registered.id, measurement)
+                    .map_err(display)?;
+            }
+            self.db
+                .results()
+                .insert(registered.id, result)
+                .map_err(display)?;
+            self.db
+                .tests()
+                .update_state(
+                    registered.id,
+                    mamut_domain::TestState::Calculated,
+                    registered.revision,
+                )
+                .map_err(display)?;
+
+            for (entity, id, action) in [
+                ("specimen", specimen.id.to_string(), AuditAction::Created),
+                ("test", registered.id.to_string(), AuditAction::Created),
+                ("result", registered.id.to_string(), AuditAction::Calculated),
+            ] {
+                let entry =
+                    AuditEntry::new(at, actor.clone(), entity, id, action).map_err(display)?;
+                self.db.audit().append(&entry).map_err(display)?;
+            }
+            Ok(())
+        })();
+
+        match writes {
+            Ok(()) => {
+                self.db.execute_raw("COMMIT").map_err(display)?;
+                Ok(())
+            }
+            Err(error) => {
+                // Si el ROLLBACK también falla, el error original es el que importa.
+                let _ = self.db.execute_raw("ROLLBACK");
+                Err(error)
+            }
         }
-        Ok(())
     }
 
     /// Ensayos de una muestra, para el historial.
@@ -435,6 +455,40 @@ impl Store {
                 "muestra": code,
                 "sha256": sha256,
             }));
+        self.db.audit().append(&entry).map_err(display)?;
+        Ok(())
+    }
+
+    /// Marca el ensayo como informado y deja constancia en la auditoría.
+    pub fn mark_test_reported(
+        &self,
+        test_id: &str,
+        report_path: &str,
+        actor: &Actor,
+        at: Timestamp,
+    ) -> StoreResult<()> {
+        let id: mamut_core::TestId = test_id.parse().map_err(display)?;
+        let mut test = self
+            .db
+            .tests()
+            .get(id)
+            .map_err(display)?
+            .ok_or_else(|| format!("no existe el ensayo «{test_id}»"))?;
+        test.report().map_err(|error| error.to_string())?;
+        self.db
+            .tests()
+            .update_state(test.id, test.state, test.revision)
+            .map_err(display)?;
+
+        let entry = AuditEntry::new(
+            at,
+            actor.clone(),
+            "test",
+            test.id.to_string(),
+            AuditAction::Reported,
+        )
+        .map_err(display)?
+        .with_detail(serde_json::json!({ "informe": report_path }));
         self.db.audit().append(&entry).map_err(display)?;
         Ok(())
     }
