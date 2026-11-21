@@ -1,0 +1,64 @@
+# MAMUT Lab — workspace
+#
+# Arquitectura hexagonal (ADR-0003). Reglas duras:
+#   · `rune` SOLO puede aparecer en crates/mamut-app.
+#   · dominio, cálculos, validación y normas no hacen I/O.
+#   Se verifican en `crates/mamut-app/tests/architecture.rs`.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+authors = ["MAMUT Lab"]
+
+[workspace.dependencies]
+# --- terceros ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
+sha2 = "0.10"
+csv = "1"
+rust_xlsxwriter = "0.102"
+
+# Rune: pre-release, revisión fijada. Ver ADR-0001 y ADR-0008.
+rune = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+
+# --- internos ---
+mamut-core = { path = "crates/mamut-core" }
+mamut-standards = { path = "crates/mamut-standards" }
+mamut-domain = { path = "crates/mamut-domain" }
+mamut-calculations = { path = "crates/mamut-calculations" }
+mamut-validation = { path = "crates/mamut-validation" }
+mamut-charts = { path = "crates/mamut-charts" }
+mamut-storage = { path = "crates/mamut-storage" }
+mamut-reports = { path = "crates/mamut-reports" }
+mamut-equipment = { path = "crates/mamut-equipment" }
+mamut-import = { path = "crates/mamut-import" }
+mamut-export = { path = "crates/mamut-export" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+# OBLIGATORIO: Rune necesita estos parches; sin ellos la resolución falla
+# ("parley_engine does not have that feature line-dictionaries").
+# Las cinco revisiones deben coincidir con la de `rune`. Ver ADR-0009/D-03 y
+# docs/fase-0/02-validacion-stack.md (hallazgo H-1).
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }

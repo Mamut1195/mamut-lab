@@ -1,0 +1,7 @@
+# Configuración de Clippy.
+#
+# Las pruebas usan `unwrap()`/`expect()` a propósito: si una precondición de la prueba
+# falla, queremos que la prueba falle ruidosamente en ese punto y no que siga con un
+# valor por defecto. En código de producción las reglas de `Cargo.toml` siguen activas.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

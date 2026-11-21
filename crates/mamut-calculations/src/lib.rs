@@ -1,0 +1,31 @@
+//! `mamut-calculations` — algoritmos puros.
+//!
+//! **Nada de I/O, nada de interfaz, nada de base de datos.** Entra una estructura con
+//! magnitudes tipadas, sale otra con los resultados y las advertencias. Así se puede
+//! probar un cálculo en milisegundos y razonar sobre él sin abrir una ventana.
+//!
+//! **Frontera deliberada.** Este crate calcula *magnitudes derivadas* (área, tensión,
+//! densidad, esbeltez). No decide si un resultado es aceptable: eso es conformidad, y
+//! vive en `mamut-standards` con la puerta de la norma revisada (ADR-0006).
+
+pub mod cylinder;
+pub mod rounding;
+
+pub use cylinder::{CompressionOutcome, CylinderCompressionInput, ENGINE_VERSION};
+pub use rounding::{RoundingPolicy, round_half_away_from_zero};
+
+use thiserror::Error;
+
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum CalcError {
+    #[error(transparent)]
+    Core(#[from] mamut_core::Error),
+
+    #[error("el cálculo requiere una referencia normativa, aunque no esté revisada")]
+    MissingNorm,
+
+    #[error("la entrada no es coherente: {0}")]
+    Incoherent(String),
+}
+
+pub type Result<T> = std::result::Result<T, CalcError>;

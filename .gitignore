@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/target/
+*.rs.bk
+
+# Registros de compilación y pruebas (evidencia puntual, no se versiona)
+*.log
+
+# Sistema operativo
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editores
+.vscode/
+.idea/
+*.swp
+
+# Salidas locales de la aplicación
+*.db
+*.db-wal
+*.db-shm
+/out/
+/dist/
+
+# Nota: las capturas de evidencia de la Fase 0 se conservan a propósito:
+#   spikes/rune-probe/probe-dark.png
+#   spikes/rune-probe/probe-light.png

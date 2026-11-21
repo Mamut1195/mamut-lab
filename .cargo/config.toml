@@ -1,0 +1,13 @@
+[net]
+# Cargo se queda bloqueado descargando la dependencia git de Rune con su cliente
+# interno (libgit2) en Windows. Verificado en Fase 0: la descarga se detenía en 0 MB
+# de forma indefinida. Con el cliente git funciona en segundos.
+# Ver docs/fase-0/02-validacion-stack.md, hallazgo H-2.
+git-fetch-with-cli = true
+
+[build]
+# La aplicación es de escritorio: no se compila para wasm por accidente.
+# (Se deja sin target por defecto para no romper `cargo test`.)
+
+[term]
+progress.when = "auto"

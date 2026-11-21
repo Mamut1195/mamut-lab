@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Las pruebas en release detectan diferencias de optimización; se ejecutan solas.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Hallazgo H-2 de la Fase 0: el cliente git interno de Cargo se cuelga en Windows
+  # con la dependencia de Rune.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  calidad:
+    name: calidad (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows es la plataforma objetivo; Linux y macOS avisan temprano de
+        # dependencias de sistema.
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Dependencias de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxkbcommon-x11-0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formato
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (sin advertencias)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Pruebas
+        run: cargo test --workspace --all-targets
+
+      - name: Pruebas de arquitectura (explícitas)
+        run: cargo test -p mamut-app --test architecture
+
+  # Las pruebas numéricas en release detectan diferencias de optimización.
+  release:
+    name: pruebas en release (semanal)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --release

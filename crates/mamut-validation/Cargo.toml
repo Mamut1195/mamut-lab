@@ -1,0 +1,19 @@
+[package]
+name = "mamut-validation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mamut-core.workspace = true
+mamut-calculations.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# Solo para construir una referencia normativa en las pruebas.
+mamut-standards.workspace = true
+
+[lints]
+workspace = true

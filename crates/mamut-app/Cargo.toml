@@ -1,0 +1,30 @@
+[package]
+name = "mamut-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mamut_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mamut-lab"
+path = "src/main.rs"
+
+[dependencies]
+# Única capa del producto que conoce Rune (ADR-0008).
+rune.workspace = true
+rune-kit.workspace = true
+
+mamut-core.workspace = true
+mamut-domain.workspace = true
+mamut-standards.workspace = true
+mamut-storage.workspace = true
+mamut-charts.workspace = true
+mamut-reports.workspace = true
+
+[lints]
+workspace = true

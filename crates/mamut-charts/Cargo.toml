@@ -1,0 +1,13 @@
+[package]
+name = "mamut-charts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Sin dependencias: geometría pura. Ni Rune, ni GPU, ni ventana.
+[dependencies]
+
+[lints]
+workspace = true

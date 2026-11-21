@@ -1,0 +1,37 @@
+# MAMUT Lab — Fase 0 risk probe (throwaway validation crate, not the product).
+#
+# Its only job is to prove, by compiling and running on this machine, that the
+# proposed stack works: Rune + rune-kit + SQLite + XLSX + PDF in one native process.
+# It is deliberately OUTSIDE the future Cargo workspace so it can be deleted.
+[workspace]
+
+[package]
+name = "rune-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Pinned to a dev rev: Rune is pre-release and `dev` is never rewritten.
+# 4a2e4379 = 2026-11-18, the rev inspected during Fase 0.
+rune = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+
+# Offline-first storage: bundled SQLite, no system dependency on Windows.
+rusqlite = { version = "0.43", features = ["bundled"] }
+# Exports validated at the dependency level in Fase 0; used for real in later phases.
+rust_xlsxwriter = "0.102"
+printpdf = "0.12"
+
+# MANDATORY, not optional. Verified in Fase 0: `rune` depends on `parley_engine`
+# with the feature `line-dictionaries`, which the published crate does not have.
+# Without these patches resolution fails with:
+#   "package `rune` depends on `parley_engine` with feature `line-dictionaries`
+#    but `parley_engine` does not have that feature"
+# Every patch must use the SAME revision as `rune` itself.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "4a2e437954f01eaacc13c0515a1d39474dd6512c" }

@@ -1,0 +1,19 @@
+[package]
+name = "mamut-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mamut-core.workspace = true
+mamut-domain.workspace = true
+mamut-standards.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,103 @@
+{
+  "pack_version": 1,
+  "pack_id": "mamut-base",
+  "generated_on": "2026-11-20",
+  "notes": "Metadatos públicos únicamente. Ninguna norma está revisada por ingeniero: todo el contenido normativo figura como pendiente. Los límites de especificación son null a propósito: no existe criterio de aceptación aplicable hasta que el laboratorio o el proyecto lo definan.",
+  "norms": [
+    {
+      "id": "astm-c39-c39m-26",
+      "body": "ASTM",
+      "designation": "C39/C39M",
+      "year": 2026,
+      "title": "Standard Test Method for Compressive Strength of Cylindrical Concrete Specimens",
+      "scope_summary": "Resistencia a compresión de especímenes cilíndricos moldeados y testigos extraídos; hormigón con densidad superior a 800 kg/m3. Resumen propio, no es texto de la norma.",
+      "status": "PendingReview",
+      "metadata_source": "https://store.astm.org/standards/c39_c39m",
+      "metadata_checked_on": "2026-11-20",
+      "metadata_confidence": "official",
+      "reviewed_by": null,
+      "reviewed_on": null,
+      "clauses_implemented": [
+        "definición de la magnitud: tensión = fuerza / área"
+      ],
+      "clauses_pending": [
+        "procedimiento de ensayo y preparación de especímenes",
+        "velocidad de carga",
+        "corrección por relación altura/diámetro",
+        "refrentado y sus requisitos",
+        "número mínimo de especímenes y tratamiento del conjunto",
+        "reglas de redondeo y cifras significativas",
+        "criterios de aceptación (los define la especificación de proyecto, no la norma de ensayo)"
+      ],
+      "spec_limits": null,
+      "notes": "La relación tensión = fuerza / área es la definición de la magnitud y no depende de la edición. Todo lo que decide si un resultado es aceptable queda pendiente de revisión contra el documento oficial."
+    },
+    {
+      "id": "aashto-t22-25",
+      "body": "AASHTO",
+      "designation": "T 22M/T 22",
+      "year": 2025,
+      "title": "Standard Method of Test for Compressive Strength of Cylindrical Concrete Specimens",
+      "scope_summary": "Método equivalente a ASTM C39/C39M para resistencia a compresión de cilindros. Resumen propio.",
+      "status": "PendingReview",
+      "metadata_source": "https://store.accuristech.com/products?publisher_id=4",
+      "metadata_checked_on": "2026-11-20",
+      "metadata_confidence": "secondary",
+      "reviewed_by": null,
+      "reviewed_on": null,
+      "clauses_implemented": [],
+      "clauses_pending": [
+        "verificar equivalencia exacta con ASTM C39/C39M en la edición adoptada",
+        "todo el contenido normativo"
+      ],
+      "spec_limits": null,
+      "notes": "Edición confirmada en un listado de distribuidor, no en la tienda oficial de AASHTO: metadata_confidence = secondary. Debe confirmarse antes de marcarla Verified."
+    },
+    {
+      "id": "nte-inen-1573-2010",
+      "body": "NTE_INEN",
+      "designation": "NTE INEN 1573",
+      "year": 2010,
+      "title": "Hormigón de cemento hidráulico. Determinación de la resistencia a la compresión de especímenes cilíndricos de hormigón de cemento hidráulico",
+      "scope_summary": "Norma ecuatoriana equivalente para el ensayo de compresión de cilindros. Resumen propio.",
+      "status": "PendingMetadata",
+      "metadata_source": "cita secundaria en repositorio académico ecuatoriano",
+      "metadata_checked_on": "2026-11-20",
+      "metadata_confidence": "secondary",
+      "reviewed_by": null,
+      "reviewed_on": null,
+      "clauses_implemented": [],
+      "clauses_pending": [
+        "confirmar si existe una edición posterior a 2010",
+        "confirmar designación y año en la fuente oficial del INEN",
+        "todo el contenido normativo"
+      ],
+      "spec_limits": null,
+      "notes": "El año 2010 proviene de una cita bibliográfica, no de la fuente oficial. No usar hasta confirmar la edición vigente."
+    }
+  ],
+  "tests": [
+    {
+      "code": "CONC-COMP-CYL",
+      "name": "Compresión de cilindros de hormigón",
+      "norm_id": "astm-c39-c39m-26",
+      "method_kind": "Normative",
+      "quantity": "Stress",
+      "unit": "MPa",
+      "computation": "tension = fuerza / area",
+      "conformity_enabled": false,
+      "blocked_reason": "La norma está en PendingReview y no hay límite de especificación aplicable."
+    },
+    {
+      "code": "SOIL-GRAN",
+      "name": "Análisis granulométrico de suelos",
+      "norm_id": null,
+      "method_kind": "Normative",
+      "quantity": "Percent",
+      "unit": "%",
+      "computation": "porcentaje_que_pasa = (masa_que_pasa / masa_total) * 100",
+      "conformity_enabled": false,
+      "blocked_reason": "Norma no incorporada al pack todavía."
+    }
+  ]
+}
