@@ -9,16 +9,23 @@
 //! vive en `mamut-standards` con la puerta de la norma revisada (ADR-0006).
 
 pub mod atterberg;
+pub mod cbr;
 pub mod compaction;
 pub mod cylinder;
+pub mod field_density;
 pub mod granulometry;
 pub mod rounding;
 
 pub use atterberg::{
     LimitPoint, liquid_limit_multi_point, liquid_limit_one_point, plastic_limit, plasticity_index,
 };
+pub use cbr::{
+    PenetrationPoint, STANDARD_LOAD_01_MPA, STANDARD_LOAD_02_MPA, cbr_from_curve, cbr_percent,
+    tangent_origin_offset,
+};
 pub use compaction::{CompactionPoint, CurvePeak, curve_peak, dry_density, wet_density};
 pub use cylinder::{CompressionOutcome, CylinderCompressionInput, ENGINE_VERSION, calculate};
+pub use field_density::{FieldDensity, field_density};
 pub use granulometry::{GranulometryOutcome, SievePass, sieve_analysis};
 pub use rounding::{RoundingPolicy, round_half_away_from_zero};
 
