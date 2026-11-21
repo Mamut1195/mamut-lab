@@ -425,6 +425,41 @@ impl Store {
         Ok(id)
     }
 
+    /// Guarda el ensayo de suelos y registra su informe en una sola transacción.
+    ///
+    /// Antes eran dos escrituras sueltas: si fallaba la segunda quedaban un PDF y un ensayo
+    /// sin registro, justo la evidencia que se quería conservar.
+    pub fn save_soil_emission(
+        &self,
+        draft: SoilTestDraft<'_>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> StoreResult<String> {
+        let code = draft.code.to_owned();
+        let kind = draft.kind.to_owned();
+        let actor = draft.actor.clone();
+        let at = draft.at;
+
+        self.db.execute_raw("BEGIN IMMEDIATE").map_err(display)?;
+
+        let write = (|| -> StoreResult<String> {
+            let id = self.save_soil_test(draft)?;
+            self.save_report(&code, &kind, &id, path, bytes, &actor, at)?;
+            Ok(id)
+        })();
+
+        match write {
+            Ok(id) => {
+                self.db.execute_raw("COMMIT").map_err(display)?;
+                Ok(id)
+            }
+            Err(error) => {
+                let _ = self.db.execute_raw("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     /// Registra un informe emitido: ruta, hash y vínculo con el ensayo.
     #[allow(clippy::too_many_arguments)]
     pub fn save_report(

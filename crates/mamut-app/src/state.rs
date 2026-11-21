@@ -1878,22 +1878,26 @@ impl AppState {
             .ok_or_else(|| "la fecha del ensayo no es válida (usa AAAA-MM-DD)".to_owned())?
             .to_iso();
 
-        let test_id = store.save_soil_test(crate::store::SoilTestDraft {
-            code: &code,
-            kind,
-            descriptor,
-            inputs_json,
-            result_value,
-            result_unit,
-            performed_on: &performed_on,
-            actor,
-            at: now,
-        })?;
-
         let file = std::path::Path::new(path);
         let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
-        store.save_report(&code, kind, &test_id, file, &bytes, actor, now)?;
-        Ok(())
+
+        store
+            .save_soil_emission(
+                crate::store::SoilTestDraft {
+                    code: &code,
+                    kind,
+                    descriptor,
+                    inputs_json,
+                    result_value,
+                    result_unit,
+                    performed_on: &performed_on,
+                    actor,
+                    at: now,
+                },
+                file,
+                &bytes,
+            )
+            .map(|_| ())
     }
 
     /// Comprueba que la muestra existe, no está anulada y es la misma para la que se calculó.
@@ -1948,6 +1952,7 @@ impl AppState {
         measurements: Vec<ReportLine>,
         calculations: Vec<ReportLine>,
         result: ReportLine,
+        observations: String,
     ) -> std::result::Result<String, String> {
         let code = self.soils.sample.text.trim().to_owned();
         let sample = self.require_report_sample(&code, outcome_sample)?;
@@ -1988,7 +1993,7 @@ impl AppState {
             result,
             // Sin especificación aplicable no hay veredicto: el informe lo dirá.
             conformity: Conformity::evaluate(0.0, &norm_ref, None, None),
-            observations: String::new(),
+            observations,
             issued_on: today,
             responsible: sample.responsible.name.clone(),
         };
@@ -2060,7 +2065,7 @@ impl AppState {
         match self.emit_soils_report(
             "atterberg",
             "Límites de Atterberg",
-            "Procedimiento TexDOT Tex-104-E / Tex-105-E (abril 2024) —              equivalencia ASTM D4318 pendiente de verificar",
+            "Procedimiento TexDOT Tex-104-E / Tex-105-E (abril 2024) — equivalencia ASTM D4318 pendiente de verificar",
             &outcome.sample,
             measurements,
             calculations,
@@ -2069,6 +2074,12 @@ impl AppState {
                 format!("{:.1}", outcome.liquid_limit),
                 "%",
             ),
+            if outcome.blows_outside_range {
+                "Aviso: alguna determinación cae fuera del rango habitual de golpes (10 a 40)."
+                    .to_owned()
+            } else {
+                String::new()
+            },
         ) {
             Ok(path) => {
                 match self.register_emission(
@@ -2152,7 +2163,7 @@ impl AppState {
         match self.emit_soils_report(
             "compactacion",
             "Compactación de laboratorio",
-            "Procedimiento TexDOT Tex-113-E (enero 2025) / Tex-114-E —              equivalencia ASTM D698/D1557 pendiente de verificar",
+            "Procedimiento TexDOT Tex-113-E (enero 2025) / Tex-114-E — equivalencia ASTM D698/D1557 pendiente de verificar",
             &peak.sample,
             points,
             calculations,
@@ -2161,6 +2172,7 @@ impl AppState {
                 format!("{:.3}", peak.max_dry_density),
                 "g/cm³",
             ),
+            String::new(),
         ) {
             Ok(path) => match self.register_emission(
                 "compactacion",
@@ -2234,6 +2246,7 @@ impl AppState {
             measurements,
             calculations,
             ReportLine::with_unit("CBR", format!("{:.1}", outcome.percent), "%"),
+            String::new(),
         ) {
             Ok(path) => match self.register_emission(
                 "cbr",
@@ -2322,6 +2335,7 @@ impl AppState {
                 format!("{:.1}", outcome.relative_compaction),
                 "%",
             ),
+            String::new(),
         ) {
             Ok(path) => match self.register_emission(
                 "densidad",
