@@ -73,6 +73,28 @@
 - **Riesgo:** algunos clientes o acreditaciones pueden exigirlo.
 - **Pago:** fase 6, aprovechando el hash canónico que ya se guarda por informe.
 
+## DT-19 · Las escrituras ocurren en el hilo de la interfaz
+
+- **Qué:** `Store::create_sample` escribe en SQLite desde el manejador de la interfaz.
+- **Por qué:** un `INSERT` local tarda microsegundos y el usuario está esperando el
+  resultado; montar un hilo con canal para eso añadiría estados intermedios sin beneficio
+  perceptible.
+- **Riesgo:** con una base grande, un `VACUUM` o un antivirus lento, la ventana puede
+  congelarse brevemente.
+- **Pago:** cuando entre la importación masiva o la generación de PDF (trabajos de segundos),
+  el almacenamiento pasa a su hilo con canal, como describe ADR-0003.
+- **Dueño:** arquitectura.
+
+## DT-20 · El arranque hace E/S en el hilo principal
+
+- **Qué:** `startup()` abre la base, aplica migraciones y carga las filas antes del primer
+  frame. Rune avisa en compilación de depuración: «`init` blocked 647 ms».
+- **Por qué:** es lo más simple y garantiza que la primera pantalla ya tiene datos.
+- **Riesgo:** en un equipo lento o con la base en red, la ventana tarda en aparecer.
+- **Pago:** fase 2, medir en release y, si el arranque en frío supera ~1 s, mostrar la
+  ventana con esqueletos y cargar los datos después.
+- **Dueño:** arquitectura.
+
 ## DT-18 · Auditoría de licencias del árbol de dependencias
 
 - **Qué:** el proyecto pasa a licencia **MIT**, pero no se ha revisado la licencia de las

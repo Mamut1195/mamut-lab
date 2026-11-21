@@ -7,7 +7,8 @@
 //! Se ejecutan con el reloj virtual de Rune: el mismo código que dibuja en pantalla se
 //! monta en memoria, se localizan elementos por su clave y se simula entrada real.
 
-use mamut_app::{AppState, Nav, SampleRow, view};
+use mamut_app::{AppState, Nav, SampleRow, Store, view};
+use mamut_core::Timestamp;
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 fn rows(count: usize) -> Vec<SampleRow> {
@@ -218,4 +219,131 @@ fn la_paleta_no_roba_el_foco_al_cerrarse() {
 
     assert_eq!(rt.state.nav, Nav::Concrete);
     assert!(!rt.state.palette_open, "elegir destino cierra la paleta");
+}
+
+// ------------------------------------------------- alta de muestras (fase 2) ---
+
+fn runtime_with_store() -> Runtime<AppState> {
+    let store = Store::in_memory(Timestamp::from_millis(1_763_500_000_000)).unwrap();
+    let mut rt = Runtime::new(
+        AppState::with_store(store),
+        view,
+        (1200.0, 800.0),
+        Env {
+            system_dark: true,
+            scale: 2.0,
+        },
+    );
+    rt.on_key = Some(mamut_app::window_key);
+    rt.frame(0.0);
+    rt
+}
+
+/// Pulsa un elemento por su clave, como haría el usuario.
+fn press(rt: &mut Runtime<AppState>, key: &str) {
+    let (x, y) = rt
+        .find(key)
+        .unwrap_or_else(|| panic!("no existe el elemento «{key}»"));
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+}
+
+fn fill_valid_form(rt: &mut Runtime<AppState>, code: &str) {
+    rt.state.form.code.text = code.to_owned();
+    rt.state.form.origin.text = "Bloque 3".to_owned();
+    rt.state.form.client.text = "Constructora Andina".to_owned();
+    rt.state.form.project.text = "Torre Norte".to_owned();
+    rt.state.form.received_on.text = "2026-11-20".to_owned();
+    rt.state.form.responsible.text = "Ana Torres".to_owned();
+}
+
+#[test]
+fn el_alta_de_una_muestra_funciona_de_punta_a_punta() {
+    let mut rt = runtime_with_store();
+    assert_eq!(rt.state.samples_total, 0);
+
+    press(&mut rt, "nav-1");
+    press(&mut rt, "new-sample");
+    assert!(rt.state.form_open);
+    assert!(
+        rt.presented("sample-form").is_some(),
+        "el formulario debe estar visible"
+    );
+
+    fill_valid_form(&mut rt, "H-2026-0100");
+    press(&mut rt, "save-sample");
+
+    assert!(
+        rt.state.form.error.is_none(),
+        "no debía haber error: {:?}",
+        rt.state.form.error
+    );
+    assert_eq!(
+        rt.state.samples_total, 1,
+        "form_open={} error={:?}",
+        rt.state.form_open, rt.state.form.error
+    );
+    assert_eq!(rt.state.rows[0].code, "H-2026-0100");
+    assert!(!rt.state.form_open, "al guardar se cierra el formulario");
+    assert!(
+        rt.state.flash.is_some(),
+        "el usuario debe saber que se guardó"
+    );
+}
+
+#[test]
+fn una_muestra_sin_codigo_no_se_guarda_y_el_error_se_ve() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-1");
+    press(&mut rt, "new-sample");
+
+    fill_valid_form(&mut rt, "   ");
+    press(&mut rt, "save-sample");
+
+    assert_eq!(rt.state.samples_total, 0, "no puede guardarse nada");
+    assert!(rt.state.form_open, "el formulario sigue abierto");
+    assert!(
+        rt.presented("form-error").is_some(),
+        "el error tiene que estar en pantalla, no solo en el estado"
+    );
+}
+
+#[test]
+fn cancelar_el_formulario_lo_cierra_sin_guardar() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-1");
+    press(&mut rt, "new-sample");
+    fill_valid_form(&mut rt, "H-2026-0101");
+
+    press(&mut rt, "cancel-sample");
+
+    assert!(!rt.state.form_open);
+    assert_eq!(rt.state.samples_total, 0);
+}
+
+#[test]
+fn el_material_elegido_en_el_formulario_llega_a_la_tabla() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-1");
+    press(&mut rt, "new-sample");
+    fill_valid_form(&mut rt, "S-2026-0001");
+
+    press(&mut rt, "material-1");
+    press(&mut rt, "save-sample");
+
+    assert_eq!(rt.state.rows[0].material, "Suelo");
+}
+
+#[test]
+fn escape_cierra_el_formulario_antes_que_la_paleta() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-1");
+    press(&mut rt, "new-sample");
+    assert!(rt.state.form_open);
+
+    rt.key(escape());
+    rt.frame(1.0 / 60.0);
+
+    assert!(!rt.state.form_open, "Esc cierra el formulario");
 }

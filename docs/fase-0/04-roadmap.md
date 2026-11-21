@@ -57,7 +57,11 @@ restante está en `docs/deuda-tecnica.md` (DT-12…DT-15).
 
 ---
 
-## Fase 2 · Primer producto funcional — 5–7 semanas
+## Fase 2 · Primer producto funcional — 5–7 semanas · **EN CURSO**
+
+**Incremento 1 completado (2026-11-21):** alta de muestras de punta a punta, con validación
+de dominio, persistencia, auditoría y contadores reales. Acta en
+[`docs/fase-2/00-incremento-1.md`](../fase-2/00-incremento-1.md).
 
 **Objetivo:** un laboratorio puede registrar una muestra, ensayar un cilindro,
 obtener el resultado y emitir el informe.

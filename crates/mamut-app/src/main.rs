@@ -6,13 +6,9 @@
 
 use std::path::PathBuf;
 
-use mamut_app::{AppState, SampleRow, load_pack, load_sample_rows};
+use mamut_app::{AppState, Store, load_pack};
 use mamut_core::{Clock, SystemClock};
-use mamut_storage::Database;
 use rune::AppSpec;
-
-/// Cuántas muestras se cargan en la tabla al arrancar.
-const SAMPLE_LIMIT: usize = 500;
 
 fn main() {
     // `AppSpec::new` exige un puntero a función: el arranque resuelve las rutas él mismo.
@@ -20,6 +16,11 @@ fn main() {
     // elemento, solo funcionarían cuando ese elemento tuviera el foco.
     rune::run(AppSpec {
         on_key: Some(mamut_app::window_key),
+        // Escenas para revisión de diseño sin datos: `--snap form.png --scene alta`.
+        scenes: &[("alta", |s: &mut AppState| {
+            s.select(mamut_app::Nav::Samples);
+            s.open_form();
+        })],
         ..AppSpec::new("MAMUT Lab", (1200.0, 800.0), startup, mamut_app::view)
     });
 }
@@ -40,29 +41,31 @@ fn startup() -> AppState {
     let db_path = data_dir.join("mamut.db");
     let mut notes: Vec<String> = Vec::new();
 
-    let rows: Vec<SampleRow> = match open_and_load(&db_path) {
-        Ok(rows) => {
-            // La ruta completa no cabe en la barra de estado; el detalle va al registro.
+    // Almacenamiento. Si falla, la aplicación abre igualmente y lo dice: es preferible
+    // poder ver el estado del sistema a una ventana que no aparece.
+    let mut state = match Store::open(&db_path, SystemClock.now()) {
+        Ok(store) => {
             notes.push("base local".to_owned());
-            rows
+            AppState::with_store(store)
         }
         Err(error) => {
-            // Un fallo de almacenamiento no debe impedir abrir la aplicación: se informa.
             notes.push(format!("almacenamiento no disponible: {error}"));
-            Vec::new()
+            AppState::new(Vec::new())
         }
     };
 
-    let mut verified = 0;
-    let mut pending = 0;
-    let mut pack_source = "no cargado".to_owned();
-
+    // Pack normativo: del usuario si lo hay, embebido en caso contrario.
     match load_pack(Some(&data_dir)) {
         Ok(selection) => {
-            verified = selection.pack.verified_count();
-            pending = selection.pack.pack().norms.len().saturating_sub(verified);
             let problems = selection.issues.len();
-            pack_source = selection.source;
+            state.norms_verified = selection.pack.verified_count();
+            state.norms_pending = selection
+                .pack
+                .pack()
+                .norms
+                .len()
+                .saturating_sub(state.norms_verified);
+            state.pack_source = selection.source;
             if problems > 0 {
                 notes.push(format!(
                     "pack del usuario descartado: {problems} problema(s)"
@@ -77,18 +80,7 @@ fn startup() -> AppState {
         }
     }
 
-    let mut state = AppState::new(rows);
-    state.norms_verified = verified;
-    state.norms_pending = pending;
-    state.pack_source = pack_source;
     state.loaded_at = SystemClock.now();
     state.storage_status = notes.join(" · ");
     state
-}
-
-fn open_and_load(path: &std::path::Path) -> Result<Vec<SampleRow>, String> {
-    let mut db = Database::open(path).map_err(|error| error.to_string())?;
-    db.migrate(SystemClock.now())
-        .map_err(|error| error.to_string())?;
-    load_sample_rows(&db, SAMPLE_LIMIT).map_err(|error| error.to_string())
 }

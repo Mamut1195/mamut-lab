@@ -3,11 +3,12 @@
 Software de escritorio para laboratorios de ensayo de materiales de construcción:
 muestras, ensayos, cálculos reproducibles, trazabilidad e informes técnicos.
 
-**Estado:** Fase 1 (fundación) **completada y revisada**. Existe el workspace de 12 crates,
-el dominio con sus invariantes, el registro normativo con puerta de conformidad, la
-persistencia SQLite con auditoría append-only, los cálculos de compresión de cilindros con
-pruebas numéricas y el armazón de la aplicación con pruebas headless. El alta de muestras,
-los informes PDF y los ensayos de suelos llegan en las fases siguientes.
+**Estado:** Fase 1 (fundación) **completada y revisada**; Fase 2 **en curso**. Ya funciona
+el alta de muestras de punta a punta (validación, guardado, auditoría y tabla), sobre el
+workspace de 12 crates, el dominio con invariantes, el registro normativo con puerta de
+conformidad, la persistencia SQLite con auditoría append-only y los cálculos de compresión
+con pruebas numéricas. Adjuntos, ensayo de compresión en pantalla e informes PDF son los
+siguientes incrementos.
 
 ---
 

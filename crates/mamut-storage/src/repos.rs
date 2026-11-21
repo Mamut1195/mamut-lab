@@ -384,6 +384,13 @@ impl<'a> TestRecordRepository<'a> {
         )?;
         Ok(())
     }
+
+    pub fn count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM test_record", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
 }
 
 // ----------------------------------------------------------------- resultados ---
