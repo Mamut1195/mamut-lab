@@ -31,6 +31,11 @@ recompilar.
 La capa 3 es la que decide si un resultado es **aceptable**. Es exactamente la que no
 se puede reconstruir de memoria con responsabilidad, y por eso no se reconstruye.
 
+**La capa 2 se documenta con fuentes públicas.** Los procedimientos publicados por
+administraciones (TxDOT, FDOT, USACE) describen los mismos ensayos y sus ecuaciones están
+transcritas en [`docs/normas/referencias-publicas/`](../normas/referencias-publicas/README.md).
+Eso permite implementar y probar sin comprar cada norma, y deja escrito qué falta confirmar.
+
 ### Regla de implementación (sustituye a «no inventar fórmulas» con algo aplicable)
 
 Una fórmula **puede** implementarse antes de tener la norma si y solo si cumple una de

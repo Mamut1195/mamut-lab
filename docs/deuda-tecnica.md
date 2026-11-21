@@ -85,6 +85,20 @@
   el almacenamiento pasa a su hilo con canal, como describe ADR-0003.
 - **Dueño:** arquitectura.
 
+## DT-21 · Implementación apoyada en referencias públicas, no en las normas
+
+- **Qué:** granulometría, límites de Atterberg y compactación se implementarán con las
+  ecuaciones de procedimientos públicos (TxDOT Tex-110-E, Tex-104-E, Tex-105-E, Tex-113-E,
+  Tex-114-E; FDOT FM 1-T 180), transcritas en `docs/normas/referencias-publicas/`.
+- **Por qué:** comprar las normas de todas las fases antes de vender una licencia no es
+  viable para un producto que empieza; y el laboratorio cliente ya posee las suyas.
+- **Riesgo:** una diferencia entre el procedimiento estatal y la norma (tolerancias, número
+  de determinaciones, correcciones) pasaría desapercibida hasta la revisión del ingeniero.
+- **Mitigación:** cada dossier lista explícitamente qué falta confirmar; los ensayos quedan en
+  `PendingReview`; no se dictamina conformidad con ellos.
+- **Pago:** al revisar cada ensayo con la norma del cliente; es configuración, no desarrollo.
+- **Dueño:** ingeniería de materiales.
+
 ## DT-20 · El arranque hace E/S en el hilo principal
 
 - **Qué:** `startup()` abre la base, aplica migraciones y carga las filas antes del primer

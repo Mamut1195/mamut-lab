@@ -109,6 +109,16 @@ Estas reglas son pruebas automatizadas, no buenas intenciones: se implementan en
 
 ---
 
+## Referencias públicas (sin coste)
+
+Implementar no exige comprar todas las normas. En
+[`referencias-publicas/`](referencias-publicas/README.md) hay un dosier de procedimientos
+publicados por administraciones públicas (TxDOT, FDOT) con las ecuaciones y los criterios de
+redondeo ya transcritos para granulometría, límites de Atterberg y compactación.
+
+Sirven para **implementar y probar**; no convierten un ensayo en `Verified`. Ese paso sigue
+exigiendo la norma del laboratorio y su ingeniero.
+
 ## Sobre el copyright
 
 El pack contiene **metadatos** (designación, año, título, URL) y **notas propias**. No
