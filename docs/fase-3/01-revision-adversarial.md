@@ -112,12 +112,26 @@ corrimiento 0,0, como si la curva fuera convexa.
 | N7 | El artefacto binario del redondeo (`1,005 → 1,00`) queda documentado con prueba |
 | N8 | Se documenta que la plausibilidad del CBR se valida en las dos penetraciones |
 
+### Cierre de la revisión
+
+El revisor verificó N1 y N2 contra el árbol: **cerrados**, con los mismos números que había
+usado para rechazarlos. Dejó dos observaciones de texto y una de diseño:
+
+- Docstrings que describían el contrato anterior → corregidos.
+- Nombre de un test que decía «no se corrige» cuando el comportamiento es «se rechaza» →
+  renombrado.
+- Un máximo ajustado **por debajo** de lo medido no tenía señal. Puede inflar el grado de
+  compactación, porque el porcentaje divide por esa densidad → se añadió
+  `below_max_measured` a `CurvePeak`, con prueba.
+
 ## Estado tras las correcciones
 
 ```
 cargo clippy -D warnings → 0
-cargo test --workspace   → 377 pruebas, 0 fallos
+cargo test --workspace   → 378 pruebas, 0 fallos
 ```
 
-Pendiente de decisión, no de trabajo: la meseta en la interpolación (se devuelve el diámetro
-más fino, documentado) y el docstring de `lib.rs`.
+**Resultado de la revisión:** los cinco fallos graves iniciales cerrados, los dos nuevos
+cerrados, y ningún defecto pendiente que impida cablear estos módulos a informes. La
+clasificación SUCS/AASHTO sigue fuera: no es un fallo de la revisión, es una fuente que no
+existe.

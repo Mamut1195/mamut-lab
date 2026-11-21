@@ -68,6 +68,10 @@ fn check_plausible(percent: f64) -> Result<()> {
 ///
 /// Se calcula el porcentaje en las dos penetraciones y se informa **el mayor**, que es lo que
 /// indica el método: un suelo puede dar más resistencia relativa a 5,08 mm que a 2,54 mm.
+///
+/// La plausibilidad se comprueba en **las dos** penetraciones antes de elegir la mayor: si
+/// una de las dos da 250 % (unidades confundidas), el ensayo se rechaza aunque la otra fuera
+/// razonable.
 pub fn cbr_percent(load_01_mpa: f64, load_02_mpa: f64) -> Result<CbrResult> {
     let first_load = check_load(load_01_mpa, 2.54)?;
     let second_load = check_load(load_02_mpa, 5.08)?;
@@ -96,9 +100,10 @@ pub fn cbr_percent(load_01_mpa: f64, load_02_mpa: f64) -> Result<CbrResult> {
 /// superficie), se traza la tangente en el punto de máxima pendiente y el origen se mueve a
 /// donde esa tangente corta el eje de penetración.
 ///
-/// Devuelve `None` cuando la curva ya es convexa desde el origen o cuando el corrimiento
-/// resultante no tiene sentido físico (mayor que 1 mm o que el 20 % de la penetración de
-/// referencia): en ese caso lo que está mal es la curva, no el origen.
+/// - `Ok(None)`: la curva ya es convexa desde el origen; no hay que corregir.
+/// - `Ok(Some(mm))`: corrimiento aplicable.
+/// - `Err`: hay que corregir y el corrimiento calculado no tiene sentido físico (más de
+///   1 mm). En ese caso lo que está mal es la curva, no el origen, y el ensayo se detiene.
 pub fn tangent_origin_offset(points: &[PenetrationPoint]) -> Result<Option<f64>> {
     if points.len() < 3 {
         return Ok(None);
@@ -297,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn una_curva_que_se_empina_tarde_no_se_corrige() {
+    fn una_curva_que_se_empina_tarde_se_rechaza() {
         // El tramo de máxima pendiente está al final: un corrimiento de varios milímetros no
         // tiene sentido físico.
         let points = [

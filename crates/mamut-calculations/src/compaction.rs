@@ -71,14 +71,24 @@ pub struct CurvePeak {
     pub max_dry_density_g_cm3: f64,
     /// Puntos que sostienen el máximo. Con tres es el mínimo para ajustar una parábola.
     pub points_used: usize,
+    /// El máximo ajustado queda por debajo del mayor valor medido en más de un 1 %: el
+    /// ajuste suavizó un pico aislado. Es defendible, pero como el grado de compactación
+    /// divide por esta densidad, conviene revisarlo.
+    pub below_max_measured: bool,
 }
 
-/// Busca el máximo de la curva ajustando una parábola a los tres puntos que rodean al
-/// mayor valor medido.
+/// Busca el máximo de la curva ajustando una parábola **a todos los puntos** por mínimos
+/// cuadrados.
 ///
-/// Devuelve `None` cuando no hay un máximo interior: con menos de tres puntos, cuando el
-/// mayor está en un extremo (la curva seguiría subiendo o bajando) o cuando la parábola
-/// abre hacia arriba. Es preferible no dar un número a inventarlo.
+/// Ajustar solo a los tres puntos que rodean al mayor hacía que el resultado dependiera de
+/// qué tres puntos hubiera: con cinco puntos, ignorar dos movía la humedad óptima un punto
+/// entero y la densidad máxima más de lo que el método publica.
+///
+/// Devuelve `None` cuando no hay un máximo defendible: con menos de tres puntos, si la
+/// parábola abre hacia arriba o es degenerada, si el vértice cae fuera del rango de
+/// humedades ensayado o si supera en más de un 1 % la mayor densidad medida (un artefacto
+/// del ajuste, no un resultado). Un vértice por debajo de lo medido se acepta y se marca en
+/// `below_max_measured`.
 pub fn curve_peak(points: &[CompactionPoint]) -> Option<CurvePeak> {
     if points.len() < 3 {
         return None;
@@ -157,6 +167,7 @@ pub fn curve_peak(points: &[CompactionPoint]) -> Option<CurvePeak> {
         optimum_moisture_percent: vertex_x,
         max_dry_density_g_cm3: vertex_y,
         points_used: points.len(),
+        below_max_measured: vertex_y < y_max * 0.99,
     })
 }
 
@@ -403,5 +414,36 @@ mod tests {
         .expect("una curva normal debe dar maximo");
         assert!(peak.max_dry_density_g_cm3 < 1.96 * 1.01);
         assert_eq!(peak.points_used, 5);
+    }
+
+    #[test]
+    fn un_maximo_muy_por_debajo_de_lo_medido_se_marca() {
+        // Un pico aislado hace que el ajuste quede por debajo; el máximo es defendible, pero
+        // como el grado de compactación divide por él, se avisa.
+        let peak = curve_peak(&[
+            CompactionPoint {
+                moisture_percent: 8.0,
+                dry_density_g_cm3: 1.90,
+            },
+            CompactionPoint {
+                moisture_percent: 10.0,
+                dry_density_g_cm3: 1.90,
+            },
+            CompactionPoint {
+                moisture_percent: 12.0,
+                dry_density_g_cm3: 2.00,
+            },
+            CompactionPoint {
+                moisture_percent: 14.0,
+                dry_density_g_cm3: 1.90,
+            },
+            CompactionPoint {
+                moisture_percent: 16.0,
+                dry_density_g_cm3: 1.90,
+            },
+        ])
+        .expect("la curva tiene máximo");
+        assert!(peak.below_max_measured);
+        assert!(peak.max_dry_density_g_cm3 < 2.00);
     }
 }
