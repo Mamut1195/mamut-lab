@@ -1139,3 +1139,61 @@ fn dos_ensayos_dibujan_el_grafico_resistencia_edad() {
         "con dos edades distintas debe dibujarse el gráfico"
     );
 }
+
+#[test]
+fn editar_despues_de_calcular_invalida_el_ensayo() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0020");
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0020");
+    press(&mut rt, "calculate-test");
+    assert!(rt.state.test_form.outcome.is_some());
+
+    // Se cambia la carga después de calcular: el resultado ya no corresponde.
+    rt.state.test_form.load.text = "600".to_owned();
+    press(&mut rt, "save-test");
+
+    assert!(rt.state.test_form.saved.is_none(), "no se guarda");
+    assert!(
+        rt.state
+            .test_form
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("cambiaron"),
+        "{:?}",
+        rt.state.test_form.error
+    );
+}
+
+#[test]
+fn editar_despues_de_calcular_invalida_la_granulometria() {
+    let mut rt = runtime_with_store();
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0030".to_owned();
+    rt.state.soils.total.text = "1000".to_owned();
+    for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+    press(&mut rt, "calculate-granulometry");
+    assert!(rt.state.soils.outcome.is_some());
+
+    // Se cambia la masa total después de calcular.
+    rt.state.soils.total.text = "1200".to_owned();
+    press(&mut rt, "granulometry-pdf");
+
+    assert!(
+        rt.state.soils.report_path.is_none(),
+        "no se emite el informe"
+    );
+    assert!(
+        rt.state
+            .soils
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("cambiaron"),
+        "{:?}",
+        rt.state.soils.error
+    );
+}

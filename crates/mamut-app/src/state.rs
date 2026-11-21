@@ -35,6 +35,10 @@ pub const SAMPLE_LIMIT: usize = 500;
 /// muestra, no solo que «alguien» lo hizo.
 pub const LOCAL_ACTOR_ID: &str = "local";
 
+/// Piezas del ajuste del límite líquido: valor, pendiente, R², número de determinaciones,
+/// aviso de golpes fuera de rango y las determinaciones originales.
+type LimitFitParts = (f64, f64, f64, usize, bool, Vec<(u32, f64)>);
+
 /// Secciones de la navegación lateral.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nav {
@@ -188,6 +192,8 @@ pub struct SoilsForm {
     pub error: Option<String>,
     pub outcome: Option<SoilsOutcome>,
     pub report_path: Option<String>,
+    /// Firma de los campos con los que se calculó.
+    pub computed_from: Option<String>,
 }
 
 impl SoilsForm {
@@ -199,6 +205,7 @@ impl SoilsForm {
             error: None,
             outcome: None,
             report_path: None,
+            computed_from: None,
         };
         // Serie habitual de tamices, con el retenido vacío.
         for size in ["9.5", "4.75", "2.0", "0.425", "0.075"] {
@@ -217,7 +224,7 @@ impl Default for SoilsForm {
     }
 }
 
-/// Una determinación del límite líquido en el formulario.
+/// Piezas del ajuste del límite líquido: valor, pendiente, R², determinaciones, aviso\n/// de golpes fuera de rango y las determinaciones originales.\ntype LimitFitParts = (f64, f64, f64, usize, bool, Vec<(u32, f64)>);\n\n/// Una determinación del límite líquido en el formulario.
 pub struct LimitRow {
     pub blows: TextEdit,
     pub moisture: TextEdit,
@@ -226,6 +233,8 @@ pub struct LimitRow {
 /// Resultado de límites de Atterberg.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LimitsOutcome {
+    /// Determinaciones originales: golpes y humedad.
+    pub points: Vec<(u32, f64)>,
     pub liquid_limit: f64,
     pub slope: f64,
     pub r_squared: f64,
@@ -243,6 +252,8 @@ pub struct LimitsForm {
     pub tare: TextEdit,
     pub error: Option<String>,
     pub outcome: Option<LimitsOutcome>,
+    /// Firma de los campos con los que se calculó.
+    pub computed_from: Option<String>,
 }
 
 impl LimitsForm {
@@ -254,6 +265,7 @@ impl LimitsForm {
             tare: TextEdit::new(""),
             error: None,
             outcome: None,
+            computed_from: None,
         };
         // Tres determinaciones: el mínimo que exige el ajuste.
         for _ in 0..3 {
@@ -289,6 +301,8 @@ pub struct DensityForm {
     pub optimum: TextEdit,
     pub error: Option<String>,
     pub outcome: Option<DensityOutcome>,
+    /// Firma de los campos con los que se calculó.
+    pub computed_from: Option<String>,
 }
 
 impl DensityForm {
@@ -300,6 +314,7 @@ impl DensityForm {
             optimum: TextEdit::new(""),
             error: None,
             outcome: None,
+            computed_from: None,
         }
     }
 }
@@ -367,8 +382,10 @@ pub struct CbrRow {
 }
 
 /// Resultado del CBR.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CbrOutcome {
+    /// Curva original: penetración y carga unitaria.
+    pub points: Vec<(f64, f64)>,
     pub percent: f64,
     pub governing_penetration: f64,
     pub offset: f64,
@@ -379,6 +396,8 @@ pub struct CbrForm {
     pub rows: Vec<CbrRow>,
     pub error: Option<String>,
     pub outcome: Option<CbrOutcome>,
+    /// Firma de los campos con los que se calculó.
+    pub computed_from: Option<String>,
 }
 
 impl CbrForm {
@@ -387,6 +406,7 @@ impl CbrForm {
             rows: Vec::new(),
             error: None,
             outcome: None,
+            computed_from: None,
         };
         // Penetraciones habituales del ensayo: la curva debe pasar de 5,08 mm.
         for penetration in ["0", "0.5", "1.0", "2.54", "5.08"] {
@@ -421,6 +441,8 @@ pub struct TestForm {
     input: Option<CylinderCompressionInput>,
     /// Identificador del ensayo ya guardado.
     pub saved: Option<String>,
+    /// Firma de los campos con los que se calculó: si cambian, el resultado caduca.
+    pub computed_from: Option<String>,
     pub report_path: Option<String>,
 }
 
@@ -440,6 +462,7 @@ impl TestForm {
             input: None,
             saved: None,
             report_path: None,
+            computed_from: None,
         }
     }
 
@@ -448,6 +471,7 @@ impl TestForm {
     pub fn clear_result(&mut self) {
         self.outcome = None;
         self.input = None;
+        self.computed_from = None;
         self.saved = None;
         self.report_path = None;
         self.error = None;
@@ -815,6 +839,7 @@ impl AppState {
                     conformity: verdict_text(&conformity),
                 });
                 self.test_form.input = Some(input);
+                self.test_form.computed_from = Some(self.test_signature());
             }
             Err(error) => self.test_form.error = Some(error.to_string()),
         }
@@ -828,6 +853,13 @@ impl AppState {
             self.test_form.error = Some("calcula el ensayo antes de guardarlo".to_owned());
             return;
         };
+        if let Err(message) =
+            self.require_fresh(&self.test_signature(), &self.test_form.computed_from)
+        {
+            self.test_form.error = Some(message);
+            return;
+        }
+
         let Some(store) = &self.store else {
             self.test_form.error = Some("no hay almacenamiento disponible".to_owned());
             return;
@@ -941,6 +973,13 @@ impl AppState {
             self.test_form.error = Some("no hay resultado calculado".to_owned());
             return;
         };
+        if let Err(message) =
+            self.require_fresh(&self.test_signature(), &self.test_form.computed_from)
+        {
+            self.test_form.error = Some(message);
+            return;
+        }
+
         if self.test_form.saved.is_none() {
             self.test_form.error = Some("guarda el ensayo antes de emitir el informe".to_owned());
             return;
@@ -1241,6 +1280,7 @@ impl AppState {
                     cu: outcome.cu,
                     cc: outcome.cc,
                 });
+                self.soils.computed_from = Some(self.soils_signature());
                 self.soils.report_path = None;
             }
             Err(error) => self.soils.error = Some(error.to_string()),
@@ -1256,6 +1296,12 @@ impl AppState {
             self.soils.error = Some("calcula la granulometría antes de emitir el informe".into());
             return;
         };
+        if let Err(message) = self.require_fresh(&self.soils_signature(), &self.soils.computed_from)
+        {
+            self.soils.error = Some(message);
+            return;
+        }
+
         let code = self.soils.sample.text.trim().to_owned();
         if code.is_empty() {
             self.soils.error = Some("indica la muestra a la que corresponde el informe".into());
@@ -1333,7 +1379,7 @@ impl AppState {
         self.limits.error = None;
         self.limits.outcome = None;
 
-        let parsed = (|| -> std::result::Result<(f64, f64, f64, usize, bool), String> {
+        let parsed = (|| -> std::result::Result<LimitFitParts, String> {
             let mut points = Vec::new();
             for (index, row) in self.limits.rows.iter().enumerate() {
                 let blows = row.blows.text.trim();
@@ -1369,16 +1415,21 @@ impl AppState {
                 fit.r_squared,
                 fit.determinations,
                 fit.has_blows_outside_range,
+                points
+                    .iter()
+                    .map(|point| (point.blows, point.moisture_percent))
+                    .collect(),
             ))
         })();
 
-        let (liquid_limit, slope, r_squared, determinations, blows_outside_range) = match parsed {
-            Ok(values) => values,
-            Err(message) => {
-                self.limits.error = Some(message);
-                return;
-            }
-        };
+        let (liquid_limit, slope, r_squared, determinations, blows_outside_range, points) =
+            match parsed {
+                Ok(values) => values,
+                Err(message) => {
+                    self.limits.error = Some(message);
+                    return;
+                }
+            };
 
         // Límite plástico: opcional, pero si se empieza hay que terminarlo.
         let water = self.limits.water.text.trim();
@@ -1419,7 +1470,9 @@ impl AppState {
             (Some(plastic), Some(index))
         };
 
+        self.limits.computed_from = Some(self.limits_signature());
         self.limits.outcome = Some(LimitsOutcome {
+            points,
             liquid_limit,
             slope,
             r_squared,
@@ -1445,6 +1498,7 @@ impl AppState {
 
         match parsed {
             Ok(result) => {
+                self.density.computed_from = Some(self.density_signature());
                 self.density.outcome = Some(DensityOutcome {
                     dry_density: result.dry_density_g_cm3,
                     relative_compaction: result.relative_compaction_percent,
@@ -1577,7 +1631,12 @@ impl AppState {
 
         match cbr_from_curve(&points) {
             Ok(result) => {
+                self.cbr.computed_from = Some(self.cbr_signature());
                 self.cbr.outcome = Some(CbrOutcome {
+                    points: points
+                        .iter()
+                        .map(|point| (point.penetration_mm, point.load_mpa))
+                        .collect(),
                     percent: result.percent,
                     governing_penetration: result.governing_penetration_mm,
                     offset: result.offset_mm,
@@ -1678,16 +1737,35 @@ impl AppState {
             self.limits.error = Some("calcula los límites antes de emitir el informe".into());
             return;
         };
-        let measurements = vec![
-            ReportLine::with_unit("Determinaciones", outcome.determinations.to_string(), ""),
-            ReportLine::with_unit("Pendiente del ajuste", format!("{:.3}", outcome.slope), ""),
+        if let Err(message) =
+            self.require_fresh(&self.limits_signature(), &self.limits.computed_from)
+        {
+            self.limits.error = Some(message);
+            return;
+        }
+
+        // Los datos originales son las determinaciones, no sus derivados: un informe sin
+        // ellas no se puede auditar.
+        let measurements: Vec<ReportLine> = outcome
+            .points
+            .iter()
+            .map(|(blows, moisture)| {
+                ReportLine::with_unit(
+                    format!("Determinación a {blows} golpes"),
+                    format!("{moisture:.2}"),
+                    "%",
+                )
+            })
+            .collect();
+        let mut calculations = vec![
+            ReportLine::with_unit("Pendiente del ajuste", format!("{:.4}", outcome.slope), ""),
             ReportLine::with_unit(
                 "Coeficiente de determinación",
-                format!("{:.3}", outcome.r_squared),
+                format!("{:.4}", outcome.r_squared),
                 "",
             ),
+            ReportLine::with_unit("Determinaciones", outcome.determinations.to_string(), ""),
         ];
-        let mut calculations = Vec::new();
         if let Some(plastic) = outcome.plastic_limit {
             calculations.push(ReportLine::with_unit(
                 "Límite plástico",
@@ -1761,10 +1839,27 @@ impl AppState {
 
     /// Emite el informe de CBR.
     pub fn report_cbr(&mut self) {
-        let Some(outcome) = self.cbr.outcome else {
+        let Some(outcome) = self.cbr.outcome.clone() else {
             self.cbr.error = Some("calcula el CBR antes de emitir el informe".into());
             return;
         };
+        if let Err(message) = self.require_fresh(&self.cbr_signature(), &self.cbr.computed_from) {
+            self.cbr.error = Some(message);
+            return;
+        }
+
+        // La curva medida va al informe: es el dato original del ensayo.
+        let measurements: Vec<ReportLine> = outcome
+            .points
+            .iter()
+            .map(|(penetration, load)| {
+                ReportLine::with_unit(
+                    format!("Penetración {penetration} mm"),
+                    format!("{load:.4}"),
+                    "MPa",
+                )
+            })
+            .collect();
         let calculations = vec![
             ReportLine::with_unit(
                 "Penetración que gobierna",
@@ -1781,7 +1876,7 @@ impl AppState {
             "cbr",
             "California Bearing Ratio",
             ("D1883", 2024, "CBR de suelos compactados"),
-            Vec::new(),
+            measurements,
             calculations,
             ReportLine::with_unit("CBR", format!("{:.1}", outcome.percent), "%"),
         ) {
@@ -1796,6 +1891,13 @@ impl AppState {
             self.density.error = Some("calcula la densidad antes de emitir el informe".into());
             return;
         };
+        if let Err(message) =
+            self.require_fresh(&self.density_signature(), &self.density.computed_from)
+        {
+            self.density.error = Some(message);
+            return;
+        }
+
         let measurements = vec![
             ReportLine::with_unit("Densidad húmeda", self.density.wet.text.trim(), "g/cm³"),
             ReportLine::with_unit("Humedad en sitio", self.density.moisture.text.trim(), "%"),
@@ -1826,6 +1928,92 @@ impl AppState {
         ) {
             Ok(path) => self.flash = Some(format!("Informe de densidad: {path}")),
             Err(message) => self.density.error = Some(message),
+        }
+    }
+
+    /// Firma de los campos del ensayo de compresión: si cambian, el resultado caduca.
+    fn test_signature(&self) -> String {
+        let form = &self.test_form;
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            form.sample_code.text,
+            form.designation.text,
+            form.diameter.text,
+            form.height.text,
+            form.mass.text,
+            form.age.text,
+            form.load.text
+        )
+    }
+
+    /// Firma de los campos de granulometría.
+    fn soils_signature(&self) -> String {
+        let mut out = self.soils.total.text.clone();
+        for row in &self.soils.rows {
+            out.push('|');
+            out.push_str(&row.size.text);
+            out.push(':');
+            out.push_str(&row.retained.text);
+        }
+        out
+    }
+
+    /// Firma de los campos de límites de Atterberg.
+    fn limits_signature(&self) -> String {
+        let mut out = String::new();
+        for row in &self.limits.rows {
+            out.push_str(&row.blows.text);
+            out.push(':');
+            out.push_str(&row.moisture.text);
+            out.push('|');
+        }
+        out.push_str(&self.limits.water.text);
+        out.push('|');
+        out.push_str(&self.limits.dry.text);
+        out.push('|');
+        out.push_str(&self.limits.tare.text);
+        out
+    }
+
+    /// Firma de los campos de densidad en sitio.
+    fn density_signature(&self) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            self.density.wet.text,
+            self.density.moisture.text,
+            self.density.max_dry.text,
+            self.density.optimum.text
+        )
+    }
+
+    /// Firma de la curva de CBR.
+    fn cbr_signature(&self) -> String {
+        let mut out = String::new();
+        for row in &self.cbr.rows {
+            out.push_str(&row.penetration.text);
+            out.push(':');
+            out.push_str(&row.load.text);
+            out.push('|');
+        }
+        out
+    }
+
+    /// Comprueba que el resultado mostrado corresponde a lo que hay en pantalla.
+    ///
+    /// Sin esto, editar un campo después de calcular dejaba un resultado que ya no era el
+    /// de los datos visibles: el informe se emitía con la firma de unos números que el
+    /// usuario había cambiado.
+    fn require_fresh(
+        &self,
+        current: &str,
+        computed: &Option<String>,
+    ) -> std::result::Result<(), String> {
+        match computed {
+            Some(signature) if signature == current => Ok(()),
+            _ => Err(
+                "los datos cambiaron desde el cálculo: vuelve a calcular antes de guardar o emitir"
+                    .to_owned(),
+            ),
         }
     }
 

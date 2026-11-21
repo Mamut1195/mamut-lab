@@ -62,6 +62,10 @@ impl Store {
     ///
     /// Los informes van a `<datos>/reports/`, con el nombre que propone el usuario pero
     /// saneado: un nombre con separadores no puede escapar de esa carpeta.
+    ///
+    /// **Nunca se sobrescribe un informe.** Emitir dos veces el mismo ensayo produce
+    /// `informe.pdf`, `informe-2.pdf`, `informe-3.pdf`… Un informe es un documento que se
+    /// entregó: pisarlo borraría la evidencia de lo que se emitió antes.
     pub fn save_pdf(&self, name: &str, bytes: &[u8]) -> StoreResult<PathBuf> {
         let dir = self.data_dir.join("reports");
         std::fs::create_dir_all(&dir).map_err(display)?;
@@ -75,7 +79,16 @@ impl Store {
                 }
             })
             .collect();
-        let file = dir.join(format!("{sanitized}.pdf"));
+
+        let mut file = dir.join(format!("{sanitized}.pdf"));
+        let mut attempt = 1u32;
+        while file.exists() {
+            attempt += 1;
+            file = dir.join(format!("{sanitized}-{attempt}.pdf"));
+            if attempt > 10_000 {
+                return Err("no se pudo encontrar un nombre libre para el informe".to_owned());
+            }
+        }
         std::fs::write(&file, bytes).map_err(display)?;
         Ok(file)
     }
@@ -544,6 +557,23 @@ mod tests {
 
         let _ = std::fs::remove_file(csv);
         let _ = std::fs::remove_file(xlsx);
+    }
+
+    #[test]
+    fn dos_informes_con_el_mismo_nombre_no_se_pisan() {
+        let store = Store::in_memory(now()).unwrap();
+        let first = store.save_pdf("informe-x", b"%PDF-1.4 uno").unwrap();
+        let second = store.save_pdf("informe-x", b"%PDF-1.4 dos").unwrap();
+
+        assert_ne!(first, second, "el segundo informe debe tener otro nombre");
+        assert!(first.exists(), "el primero sigue en disco");
+        assert!(second.exists());
+        // El primero conserva su contenido: no se sobrescribió.
+        let content = std::fs::read(&first).unwrap();
+        assert!(String::from_utf8_lossy(&content).contains("uno"));
+
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
     }
 
     #[test]
