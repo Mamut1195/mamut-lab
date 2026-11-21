@@ -85,6 +85,26 @@
   el almacenamiento pasa a su hilo con canal, como describe ADR-0003.
 - **Dueño:** arquitectura.
 
+## DT-22 · Adjuntos sin almacén de archivos
+
+- **Qué:** la tabla `attachment` existe (esquema v5) y guarda metadatos y SHA-256, pero no
+  hay almacén de contenido ni interfaz para adjuntar.
+- **Por qué:** se priorizó cerrar el ciclo muestra → ensayo → informe.
+- **Riesgo:** el alta de muestras anuncia adjuntos y todavía no los acepta.
+- **Pago:** incremento 3 de la fase 2 (copiar a `<datos>/attachments/<sha256>/`, una
+  entrada de auditoría por adjunto).
+- **Dueño:** producto.
+
+## DT-23 · La identidad del laboratorio está fija en el informe
+
+- **Qué:** el PDF emite «MAMUT Lab» como nombre del laboratorio; no hay configuración de
+  nombre, dirección, acreditación, logo ni firma.
+- **Por qué:** la configuración por instalación es trabajo de la fase 6 y no bloqueaba el
+  ciclo.
+- **Riesgo:** un informe emitido hoy no sirve para entregar a un cliente real sin editar.
+- **Pago:** antes del primer piloto comercial: formulario de identidad y persistencia.
+- **Dueño:** producto.
+
 ## DT-21 · Implementación apoyada en referencias públicas, no en las normas
 
 - **Qué:** granulometría, límites de Atterberg y compactación se implementarán con las

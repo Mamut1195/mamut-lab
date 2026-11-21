@@ -23,6 +23,8 @@ mamut-core.workspace = true
 mamut-domain.workspace = true
 mamut-standards.workspace = true
 mamut-storage.workspace = true
+mamut-calculations.workspace = true
+mamut-validation.workspace = true
 mamut-charts.workspace = true
 mamut-reports.workspace = true
 

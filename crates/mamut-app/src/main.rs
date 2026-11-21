@@ -16,11 +16,22 @@ fn main() {
     // elemento, solo funcionarían cuando ese elemento tuviera el foco.
     rune::run(AppSpec {
         on_key: Some(mamut_app::window_key),
-        // Escenas para revisión de diseño sin datos: `--snap form.png --scene alta`.
-        scenes: &[("alta", |s: &mut AppState| {
-            s.select(mamut_app::Nav::Samples);
-            s.open_form();
-        })],
+        // Escenas para revisión de diseño sin datos:
+        //   --scene alta     formulario de muestra
+        //   --scene ensayo   ensayo calculado (aritmética, sin base de datos)
+        scenes: &[
+            ("alta", |s: &mut AppState| {
+                s.select(mamut_app::Nav::Samples);
+                s.open_form();
+            }),
+            ("ensayo", |s: &mut AppState| {
+                s.select(mamut_app::Nav::Concrete);
+                s.test_form.sample_code.text = "H-2026-0001".to_owned();
+                s.test_form.mass.text = "12300".to_owned();
+                s.test_form.load.text = "500".to_owned();
+                s.calculate_test();
+            }),
+        ],
         ..AppSpec::new("MAMUT Lab", (1200.0, 800.0), startup, mamut_app::view)
     });
 }
@@ -65,6 +76,10 @@ fn startup() -> AppState {
                 .norms
                 .len()
                 .saturating_sub(state.norms_verified);
+            // Descriptor del ensayo de compresión, con su norma del pack.
+            if let Some(descriptor) = selection.pack.descriptors().into_iter().next() {
+                state.set_descriptor(descriptor);
+            }
             state.pack_source = selection.source;
             if problems > 0 {
                 notes.push(format!(

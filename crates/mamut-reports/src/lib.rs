@@ -10,6 +10,12 @@
 //! conformidad** y su motivo. No hay ninguna ruta de código que convierta un resultado
 //! calculado en un «conforme» por omisión.
 
+pub mod layout;
+pub mod pdf;
+
+pub use layout::render_pdf;
+pub use pdf::PdfDocument;
+
 use mamut_core::{CivilDate, ReportId};
 use mamut_standards::Conformity;
 
@@ -228,7 +234,11 @@ impl ReportRenderer for PlainTextRenderer {
     }
 }
 
-fn verdict_text(conformity: &Conformity) -> String {
+/// Texto del veredicto, compartido por el renderizador de texto y el PDF.
+///
+/// Es la única función que convierte un [`Conformity`] en palabras, de modo que pantalla,
+/// previsualización e informe no puedan decir cosas distintas.
+pub fn verdict_text(conformity: &Conformity) -> String {
     match conformity {
         Conformity::Conforms { spec, .. } => {
             format!("CONFORME — {}: {}", spec.source, spec.requirement)

@@ -11,7 +11,7 @@
 pub mod cylinder;
 pub mod rounding;
 
-pub use cylinder::{CompressionOutcome, CylinderCompressionInput, ENGINE_VERSION};
+pub use cylinder::{CompressionOutcome, CylinderCompressionInput, ENGINE_VERSION, calculate};
 pub use rounding::{RoundingPolicy, round_half_away_from_zero};
 
 use thiserror::Error;

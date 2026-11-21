@@ -9,6 +9,7 @@
 
 use mamut_app::{AppState, Nav, SampleRow, Store, view};
 use mamut_core::Timestamp;
+use mamut_standards::{MethodKind, NormBody, NormRef, NormStatus, TestCode, TestDescriptor};
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 fn rows(count: usize) -> Vec<SampleRow> {
@@ -225,8 +226,10 @@ fn la_paleta_no_roba_el_foco_al_cerrarse() {
 
 fn runtime_with_store() -> Runtime<AppState> {
     let store = Store::in_memory(Timestamp::from_millis(1_763_500_000_000)).unwrap();
+    let mut state = AppState::with_store(store);
+    state.set_descriptor(descriptor());
     let mut rt = Runtime::new(
-        AppState::with_store(store),
+        state,
         view,
         (1200.0, 800.0),
         Env {
@@ -237,6 +240,63 @@ fn runtime_with_store() -> Runtime<AppState> {
     rt.on_key = Some(mamut_app::window_key);
     rt.frame(0.0);
     rt
+}
+
+/// Descriptor del ensayo tal como lo entrega el paquete normativo.
+fn descriptor() -> TestDescriptor {
+    let norm = NormRef::new(
+        NormBody::Astm,
+        "C39/C39M",
+        2026,
+        "Compresión de cilindros",
+        NormStatus::PendingReview,
+    )
+    .unwrap();
+    TestDescriptor::new(
+        TestCode::new("CONC-COMP-CYL").unwrap(),
+        "Compresión de cilindros",
+        MethodKind::Normative,
+        Some(norm),
+        false,
+    )
+    .unwrap()
+}
+
+/// Registra una muestra directamente en el almacén, como haría el alta.
+fn seed_sample(rt: &mut Runtime<AppState>, code: &str) {
+    use mamut_core::{Actor, CivilDate};
+    use mamut_domain::{Material, Sample, SampleCode};
+
+    let sample = Sample::new(
+        SampleCode::new(code).unwrap(),
+        Material::Concrete,
+        "Bloque 3",
+        "Constructora Andina",
+        "Torre Norte",
+        CivilDate::new(2026, 11, 20).unwrap(),
+        Actor::new("local", "Ana Torres").unwrap(),
+        Timestamp::from_millis(1_763_500_000_000),
+    )
+    .unwrap();
+    let store = rt.state.store.as_ref().expect("hay almacén");
+    store
+        .create_sample(
+            &sample,
+            &sample.responsible,
+            Timestamp::from_millis(1_763_500_000_000),
+        )
+        .expect("la muestra de prueba se registra");
+    rt.state.reload();
+}
+
+fn fill_test_form(rt: &mut Runtime<AppState>, code: &str) {
+    rt.state.test_form.sample_code.text = code.to_owned();
+    rt.state.test_form.designation.text = "C1".to_owned();
+    rt.state.test_form.diameter.text = "150".to_owned();
+    rt.state.test_form.height.text = "300".to_owned();
+    rt.state.test_form.mass.text = "12300".to_owned();
+    rt.state.test_form.age.text = "28".to_owned();
+    rt.state.test_form.load.text = "500".to_owned();
 }
 
 /// Pulsa un elemento por su clave, como haría el usuario.
@@ -346,4 +406,154 @@ fn escape_cierra_el_formulario_antes_que_la_paleta() {
     rt.frame(1.0 / 60.0);
 
     assert!(!rt.state.form_open, "Esc cierra el formulario");
+}
+
+// ------------------------------------------- ensayo de compresión (fase 2) ---
+
+#[test]
+fn el_ciclo_ensayo_e_informe_funciona() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0001");
+
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0001");
+    press(&mut rt, "calculate-test");
+
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "no debía fallar: {:?}",
+        rt.state.test_form.error
+    );
+    let outcome = rt
+        .state
+        .test_form
+        .outcome
+        .clone()
+        .expect("el cálculo produce resultado");
+    assert!(
+        (outcome.stress_mpa - 28.294_212).abs() < 1e-3,
+        "500 kN sobre 150 mm dan 28.29 MPa, salió {}",
+        outcome.stress_mpa
+    );
+    assert!(
+        outcome.conformity.contains("SIN JUICIO"),
+        "sin norma revisada no se dictamina: {}",
+        outcome.conformity
+    );
+    assert!(rt.presented("test-result").is_some());
+
+    press(&mut rt, "save-test");
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "guardar no debía fallar: {:?}",
+        rt.state.test_form.error
+    );
+    assert!(
+        rt.state.test_form.saved.is_some(),
+        "el ensayo queda guardado"
+    );
+    assert_eq!(rt.state.test_history.len(), 1, "y aparece en el historial");
+
+    press(&mut rt, "report-pdf");
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "el informe no debía fallar: {:?}",
+        rt.state.test_form.error
+    );
+    let path = rt
+        .state
+        .test_form
+        .report_path
+        .clone()
+        .expect("se genera un archivo");
+    let bytes = std::fs::read(&path).expect("el PDF existe en disco");
+    assert!(bytes.starts_with(b"%PDF"), "el archivo es un PDF");
+    assert!(
+        bytes.len() > 2_000,
+        "y tiene contenido, {} bytes",
+        bytes.len()
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn no_se_guarda_un_ensayo_sin_calcular() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0002");
+
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0002");
+    press(&mut rt, "save-test");
+
+    assert!(
+        rt.state
+            .test_form
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("calcula"),
+        "debe pedir el cálculo primero: {:?}",
+        rt.state.test_form.error
+    );
+    assert!(rt.state.test_form.saved.is_none());
+}
+
+#[test]
+fn un_ensayo_de_una_muestra_no_registrada_no_se_guarda() {
+    let mut rt = runtime_with_store();
+
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-9999-0000");
+    press(&mut rt, "calculate-test");
+    assert!(
+        rt.state.test_form.outcome.is_some(),
+        "el cálculo es aritmética: no exige que la muestra exista"
+    );
+
+    press(&mut rt, "save-test");
+    assert!(
+        rt.state
+            .test_form
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("no existe"),
+        "al guardar sí se exige la muestra: {:?}",
+        rt.state.test_form.error
+    );
+}
+
+#[test]
+fn una_carga_invalida_no_produce_resultado() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0003");
+
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0003");
+    rt.state.test_form.load.text = "0".to_owned();
+    press(&mut rt, "calculate-test");
+
+    assert!(rt.state.test_form.outcome.is_none(), "no hay resultado");
+    assert!(
+        rt.presented("test-error").is_some(),
+        "el error debe verse en pantalla"
+    );
+}
+
+#[test]
+fn la_coma_decimal_se_acepta_al_escribir() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0004");
+
+    press(&mut rt, "nav-2");
+    fill_test_form(&mut rt, "H-2026-0004");
+    rt.state.test_form.diameter.text = "150,0".to_owned();
+    rt.state.test_form.load.text = "500,0".to_owned();
+    press(&mut rt, "calculate-test");
+
+    assert!(
+        rt.state.test_form.error.is_none(),
+        "«150,0» es un número válido en español: {:?}",
+        rt.state.test_form.error
+    );
 }

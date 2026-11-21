@@ -391,6 +391,28 @@ impl<'a> TestRecordRepository<'a> {
             .query_row("SELECT COUNT(*) FROM test_record", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(0))
     }
+
+    /// Todos los ensayos de una muestra, pasando por sus especímenes.
+    ///
+    /// Es la consulta del historial: de la muestra al espécimen, al ensayo y a su
+    /// resultado. Se ordena por fecha de ensayo.
+    pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<TestRecord>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {TEST_COLUMNS} FROM test_record
+             WHERE specimen_id IN (SELECT id FROM specimen WHERE sample_id = ?1)
+             ORDER BY performed_on ASC, created_at ASC"
+        ))?;
+        let rows = statement.query_map(params![sample_id.to_string()], RawTest::from_row)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let raw = row?;
+            // El resultado se lee con la vía validada, igual que en `get`.
+            let result =
+                ResultRepository::new(self.conn).latest_for_test(TestId::from_str(&raw.id)?)?;
+            out.push(raw.into_record(result)?);
+        }
+        Ok(out)
+    }
 }
 
 // ----------------------------------------------------------------- resultados ---

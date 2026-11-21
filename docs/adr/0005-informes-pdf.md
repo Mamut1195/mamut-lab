@@ -1,6 +1,7 @@
 # ADR-0005 · Informes técnicos en PDF
 
-- **Estado:** aceptado (crate pendiente de prueba de concepto en fase 2)
+- **Estado:** aceptado · **matizado por ADR-0010** (el generador es propio; el modelo
+  `ReportData` y la regla del veredicto se mantienen)
 - **Fecha:** 2026-11-18
 
 ## Contexto

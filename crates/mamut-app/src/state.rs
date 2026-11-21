@@ -8,8 +8,12 @@
 
 use std::cell::Cell;
 
-use mamut_core::{Actor, CivilDate, Clock, SystemClock, Timestamp};
-use mamut_domain::{Material, Sample, SampleCode};
+use mamut_calculations::{CylinderCompressionInput, ENGINE_VERSION, RoundingPolicy, calculate};
+use mamut_core::{Actor, CivilDate, Clock, Force, Length, Mass, SystemClock, Timestamp};
+use mamut_domain::{Material, Measurement, ResultRef, Sample, SampleCode, Specimen, TestRecord};
+use mamut_reports::{LaboratoryInfo, ReportData, ReportLine, render_pdf, verdict_text};
+use mamut_standards::{Conformity, NormBody, NormRef, NormStatus, TestDescriptor};
+use mamut_validation::{PlausibilityLimits, Severity, validate_cylinder_input};
 use rune::TextEdit;
 use rune_kit::TableState;
 
@@ -133,6 +137,94 @@ impl Default for SampleForm {
     }
 }
 
+/// Resultado ya calculado, listo para mostrar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutcomeView {
+    pub area_mm2: f64,
+    pub stress_mpa: f64,
+    pub stress_display: f64,
+    pub slenderness: f64,
+    pub norm_citation: String,
+    /// Veredicto en palabras. Se calcula con el paquete normativo, no aquí.
+    pub conformity: String,
+}
+
+/// Borrador del ensayo de compresión de cilindros.
+pub struct TestForm {
+    pub sample_code: TextEdit,
+    pub designation: TextEdit,
+    pub diameter: TextEdit,
+    pub height: TextEdit,
+    pub mass: TextEdit,
+    pub age: TextEdit,
+    pub load: TextEdit,
+    pub error: Option<String>,
+    pub warnings: Vec<String>,
+    pub outcome: Option<OutcomeView>,
+    /// Entrada exacta que produjo el resultado: se guarda con él como huella.
+    input: Option<CylinderCompressionInput>,
+    /// Identificador del ensayo ya guardado.
+    pub saved: Option<String>,
+    pub report_path: Option<String>,
+}
+
+impl TestForm {
+    pub fn empty() -> Self {
+        Self {
+            sample_code: TextEdit::new(""),
+            designation: TextEdit::new("C1"),
+            diameter: TextEdit::new("150"),
+            height: TextEdit::new("300"),
+            mass: TextEdit::new(""),
+            age: TextEdit::new("28"),
+            load: TextEdit::new(""),
+            error: None,
+            warnings: Vec::new(),
+            outcome: None,
+            input: None,
+            saved: None,
+            report_path: None,
+        }
+    }
+
+    /// Limpia el resultado, pero **no** los datos: corregir una carga no debe obligar a
+    /// reescribir las dimensiones.
+    pub fn clear_result(&mut self) {
+        self.outcome = None;
+        self.input = None;
+        self.saved = None;
+        self.report_path = None;
+        self.error = None;
+        self.warnings.clear();
+    }
+}
+
+impl Default for TestForm {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+/// Una fila del historial de ensayos de una muestra.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestRow {
+    pub performed_on: String,
+    pub designation: String,
+    pub stress: String,
+    pub state: String,
+}
+
+/// Acepta coma decimal (`150,5`), que es como se teclea en español.
+fn parse_number(text: &str, field: &'static str) -> std::result::Result<f64, String> {
+    let normalized = text.trim().replace(',', ".");
+    if normalized.is_empty() {
+        return Err(format!("falta «{field}»"));
+    }
+    normalized
+        .parse::<f64>()
+        .map_err(|_| format!("«{field}» no es un número: «{}»", text.trim()))
+}
+
 pub struct AppState {
     pub nav: Nav,
     pub rows: Vec<SampleRow>,
@@ -158,6 +250,12 @@ pub struct AppState {
     pub store: Option<Store>,
     pub form: SampleForm,
     pub form_open: bool,
+    /// Formulario del ensayo de compresión.
+    pub test_form: TestForm,
+    /// Historial del ensayo para la muestra escrita en el formulario.
+    pub test_history: Vec<TestRow>,
+    /// Descriptor del ensayo, tomado del paquete normativo al arrancar.
+    pub descriptor: Option<TestDescriptor>,
     /// Mensaje efímero tras una acción correcta.
     pub flash: Option<String>,
 }
@@ -184,6 +282,9 @@ impl AppState {
             store: None,
             form: SampleForm::empty(),
             form_open: false,
+            test_form: TestForm::empty(),
+            test_history: Vec::new(),
+            descriptor: None,
             flash: None,
         }
     }
@@ -323,6 +424,361 @@ impl AppState {
                 self.reload();
             }
             Err(message) => self.form.error = Some(message),
+        }
+    }
+
+    /// Norma del ensayo, tomada del descriptor del paquete normativo.
+    ///
+    /// Si no hay descriptor (pruebas de vista), se usa una referencia pendiente: el
+    /// cálculo funciona igual y la conformidad queda sin evaluar, que es lo honesto.
+    fn current_norm(&self) -> NormRef {
+        if let Some(norm) = self.descriptor.as_ref().and_then(|d| d.norm.clone()) {
+            return norm;
+        }
+        match NormRef::new(
+            NormBody::Astm,
+            "C39/C39M",
+            2026,
+            "Compresión de cilindros",
+            NormStatus::PendingReview,
+        ) {
+            Ok(norm) => norm,
+            // Valores literales: la construcción no puede fallar.
+            Err(_) => unreachable!("la referencia por defecto es válida"),
+        }
+    }
+
+    pub fn set_descriptor(&mut self, descriptor: TestDescriptor) {
+        self.descriptor = Some(descriptor);
+    }
+
+    /// Valida y calcula el ensayo con lo que hay en el formulario.
+    pub fn calculate_test(&mut self) {
+        self.test_form.error = None;
+        self.test_form.warnings.clear();
+        self.test_form.outcome = None;
+        self.test_form.input = None;
+        self.test_form.saved = None;
+        self.test_form.report_path = None;
+
+        let parsed = (|| -> std::result::Result<CylinderCompressionInput, String> {
+            let diameter = parse_number(&self.test_form.diameter.text, "diámetro")?;
+            let height = parse_number(&self.test_form.height.text, "altura")?;
+            let mass = parse_number(&self.test_form.mass.text, "masa")?;
+            let age_value = parse_number(&self.test_form.age.text, "edad")?;
+            let load = parse_number(&self.test_form.load.text, "carga máxima")?;
+
+            if age_value < 0.0 || age_value.fract() != 0.0 {
+                return Err("la edad debe ser un número entero de días".to_owned());
+            }
+
+            Ok(CylinderCompressionInput {
+                diameter: Length::positive_millimetres(diameter, "diámetro")
+                    .map_err(|error| error.to_string())?,
+                height: Length::positive_millimetres(height, "altura")
+                    .map_err(|error| error.to_string())?,
+                mass: Mass::positive_grams(mass, "masa").map_err(|error| error.to_string())?,
+                max_load: Force::positive_kilonewtons(load, "carga máxima")
+                    .map_err(|error| error.to_string())?,
+                age_days: age_value as u32,
+                norm: self.current_norm(),
+                rounding: RoundingPolicy::PROVISIONAL,
+            })
+        })();
+
+        let input = match parsed {
+            Ok(input) => input,
+            Err(message) => {
+                self.test_form.error = Some(message);
+                return;
+            }
+        };
+
+        let validation = validate_cylinder_input(&input, &PlausibilityLimits::default());
+        self.test_form.warnings = validation
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == Severity::Warning)
+            .map(|finding| finding.message.clone())
+            .collect();
+
+        if validation.has_errors() {
+            let message = validation
+                .errors()
+                .map(|finding| finding.message.clone())
+                .collect::<Vec<_>>()
+                .join("; ");
+            self.test_form.error = Some(message);
+            return;
+        }
+
+        match calculate(&input) {
+            Ok(outcome) => {
+                let conformity = Conformity::evaluate(
+                    outcome.stress.megapascals_value(),
+                    &input.norm,
+                    None,
+                    None,
+                );
+                self.test_form.outcome = Some(OutcomeView {
+                    area_mm2: outcome.area.square_millimetres_value(),
+                    stress_mpa: outcome.stress.megapascals_value(),
+                    stress_display: outcome.stress_display,
+                    slenderness: outcome.slenderness,
+                    norm_citation: outcome.norm_citation,
+                    conformity: verdict_text(&conformity),
+                });
+                self.test_form.input = Some(input);
+            }
+            Err(error) => self.test_form.error = Some(error.to_string()),
+        }
+    }
+
+    /// Guarda el ensayo ya calculado: espécimen, ensayo, mediciones y resultado.
+    pub fn save_test(&mut self) {
+        self.test_form.error = None;
+
+        let Some(input) = self.test_form.input.clone() else {
+            self.test_form.error = Some("calcula el ensayo antes de guardarlo".to_owned());
+            return;
+        };
+        let Some(store) = &self.store else {
+            self.test_form.error = Some("no hay almacenamiento disponible".to_owned());
+            return;
+        };
+
+        let code = self.test_form.sample_code.text.trim().to_owned();
+        let sample = match store.find_sample(&code) {
+            Ok(Some(sample)) => sample,
+            Ok(None) => {
+                self.test_form.error = Some(format!(
+                    "no existe la muestra «{code}»: regístrala antes de ensayarla"
+                ));
+                return;
+            }
+            Err(error) => {
+                self.test_form.error = Some(error);
+                return;
+            }
+        };
+
+        let designation = self.test_form.designation.text.trim().to_owned();
+        let now = SystemClock.now();
+
+        let build = (|| -> std::result::Result<(Specimen, TestRecord, Vec<Measurement>, ResultRef), String> {
+            let specimen = Specimen::new(
+                sample.id,
+                designation,
+                input.diameter,
+                input.height,
+                input.mass,
+                input.age_days,
+                now,
+            )
+            .map_err(|error| error.to_string())?;
+
+            let descriptor = self
+                .descriptor
+                .clone()
+                .ok_or_else(|| "no hay descriptor de ensayo cargado".to_owned())?;
+
+            let test = TestRecord::new(
+                descriptor,
+                specimen.id,
+                CivilDate::today(&SystemClock),
+                sample.responsible.clone(),
+                now,
+            );
+
+            // Los datos originales se guardan tal como se teclearon.
+            let measurements = vec![
+                Measurement::new("diametro", self.test_form.diameter.text.trim(), "mm", now)
+                    .map_err(|error| error.to_string())?,
+                Measurement::new("altura", self.test_form.height.text.trim(), "mm", now)
+                    .map_err(|error| error.to_string())?,
+                Measurement::new("masa", self.test_form.mass.text.trim(), "g", now)
+                    .map_err(|error| error.to_string())?,
+                Measurement::new("carga_maxima", self.test_form.load.text.trim(), "kN", now)
+                    .map_err(|error| error.to_string())?,
+            ];
+
+            let outcome = calculate(&input).map_err(|error| error.to_string())?;
+            let fingerprint = input.fingerprint().map_err(|error| error.to_string())?;
+            let result = ResultRef::new(
+                outcome.stress.megapascals_value(),
+                "MPa",
+                ENGINE_VERSION,
+                fingerprint,
+                now,
+            )
+            .map_err(|error| error.to_string())?;
+
+            Ok((specimen, test, measurements, result))
+        })();
+
+        let (specimen, test, measurements, result) = match build {
+            Ok(bundle) => bundle,
+            Err(message) => {
+                self.test_form.error = Some(message);
+                return;
+            }
+        };
+
+        let test_id = test.id.to_string();
+        match store.save_test_bundle(
+            &specimen,
+            &test,
+            &measurements,
+            &result,
+            &sample.responsible,
+            now,
+        ) {
+            Ok(()) => {
+                self.test_form.saved = Some(test_id);
+                self.flash = Some(format!("Ensayo guardado para la muestra {code}"));
+                self.load_test_history();
+                self.reload();
+            }
+            Err(message) => self.test_form.error = Some(message),
+        }
+    }
+
+    /// Emite el informe PDF del ensayo guardado.
+    pub fn generate_report(&mut self) {
+        self.test_form.error = None;
+        self.test_form.report_path = None;
+
+        let Some(input) = self.test_form.input.clone() else {
+            self.test_form.error = Some("no hay resultado calculado".to_owned());
+            return;
+        };
+        if self.test_form.saved.is_none() {
+            self.test_form.error = Some("guarda el ensayo antes de emitir el informe".to_owned());
+            return;
+        }
+        let Some(store) = &self.store else {
+            self.test_form.error = Some("no hay almacenamiento disponible".to_owned());
+            return;
+        };
+
+        let code = self.test_form.sample_code.text.trim().to_owned();
+        let sample = match store.find_sample(&code) {
+            Ok(Some(sample)) => sample,
+            Ok(None) => {
+                self.test_form.error = Some(format!("no existe la muestra «{code}»"));
+                return;
+            }
+            Err(error) => {
+                self.test_form.error = Some(error);
+                return;
+            }
+        };
+
+        let outcome = match calculate(&input) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.test_form.error = Some(error.to_string());
+                return;
+            }
+        };
+        let conformity =
+            Conformity::evaluate(outcome.stress.megapascals_value(), &input.norm, None, None);
+        let today = CivilDate::today(&SystemClock);
+
+        let Some(laboratory) = LaboratoryInfo::new("MAMUT Lab") else {
+            self.test_form.error = Some("identidad del laboratorio no configurada".to_owned());
+            return;
+        };
+
+        let data = ReportData {
+            laboratory,
+            sample_code: code.clone(),
+            client: sample.client.clone(),
+            project: sample.project.clone(),
+            received_on: sample.received_on,
+            test_name: self
+                .descriptor
+                .as_ref()
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| "Compresión de cilindros".to_owned()),
+            method_label: self
+                .descriptor
+                .as_ref()
+                .map(|d| d.method_kind.label().to_owned())
+                .unwrap_or_else(|| "Normativo".to_owned()),
+            norm_citation: Some(outcome.norm_citation.clone()),
+            performed_on: today,
+            operator: sample.responsible.name.clone(),
+            equipment: None,
+            measurements: vec![
+                ReportLine::with_unit("Diámetro", self.test_form.diameter.text.trim(), "mm"),
+                ReportLine::with_unit("Altura", self.test_form.height.text.trim(), "mm"),
+                ReportLine::with_unit("Masa", self.test_form.mass.text.trim(), "g"),
+                ReportLine::with_unit("Carga máxima", self.test_form.load.text.trim(), "kN"),
+            ],
+            calculations: vec![
+                ReportLine::with_unit(
+                    "Área de sección",
+                    format!("{:.2}", outcome.area.square_millimetres_value()),
+                    "mm²",
+                ),
+                ReportLine::with_unit(
+                    "Relación altura/diámetro",
+                    format!("{:.2}", outcome.slenderness),
+                    "",
+                ),
+            ],
+            result: ReportLine::with_unit(
+                "Resistencia a compresión",
+                format!("{:.2}", outcome.stress_display),
+                "MPa",
+            ),
+            conformity,
+            observations: String::new(),
+            issued_on: today,
+            responsible: sample.responsible.name.clone(),
+        };
+
+        let bytes = render_pdf(&data);
+        match store.save_pdf(&format!("informe-{code}"), &bytes) {
+            Ok(path) => {
+                self.test_form.report_path = Some(path.display().to_string());
+                self.flash = Some(format!("Informe generado: {}", path.display()));
+            }
+            Err(message) => self.test_form.error = Some(message),
+        }
+    }
+
+    /// Relee el historial de ensayos de la muestra que hay en el formulario.
+    pub fn load_test_history(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let code = self.test_form.sample_code.text.trim().to_owned();
+        if code.is_empty() {
+            self.test_history.clear();
+            return;
+        }
+        match store.tests_for_sample(&code) {
+            Ok(tests) => {
+                self.test_history = tests
+                    .iter()
+                    .map(|test| TestRow {
+                        performed_on: test.performed_on.to_iso(),
+                        designation: test.descriptor.code.as_str().to_owned(),
+                        stress: test
+                            .result
+                            .as_ref()
+                            .map(|result| format!("{:.2} {}", result.value, result.unit))
+                            .unwrap_or_else(|| "—".to_owned()),
+                        state: test.state.label().to_owned(),
+                    })
+                    .collect();
+            }
+            Err(error) => {
+                self.test_history.clear();
+                self.flash = Some(format!("no se pudo leer el historial: {error}"));
+            }
         }
     }
 

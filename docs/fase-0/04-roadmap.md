@@ -63,6 +63,15 @@ restante está en `docs/deuda-tecnica.md` (DT-12…DT-15).
 de dominio, persistencia, auditoría y contadores reales. Acta en
 [`docs/fase-2/00-incremento-1.md`](../fase-2/00-incremento-1.md).
 
+**Incremento 2 completado (2026-11-21):** ensayo de compresión en pantalla, persistencia de
+espécimen + mediciones + resultado, historial por muestra e **informe PDF** con generador
+propio. El **criterio de salida de la fase se cumple**: las pruebas de extremo a extremo
+hacen el ciclo completo con clics simulados. Acta en
+[`docs/fase-2/00-incremento-2.md`](../fase-2/00-incremento-2.md).
+
+Pendiente para cerrar la fase por completo: adjuntos (DT-22), gráfico resistencia–edad,
+acción de exportación y edición/anulación de muestras.
+
 **Objetivo:** un laboratorio puede registrar una muestra, ensayar un cilindro,
 obtener el resultado y emitir el informe.
 

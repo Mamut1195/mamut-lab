@@ -359,6 +359,186 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
             )
     };
 
+    // ------------------------------------------------- ensayo de compresión
+    let action = |key: &'static str, label: &'static str, run: fn(&mut AppState)| {
+        el().key(key)
+            .padding(8.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.layer_02)
+            .focusable(true)
+            .child(text(label).font(kit.ty.text_small).color(kit.c.text_base))
+            .on_press(move |s: &mut AppState| run(s))
+    };
+
+    let test_error: Option<El> = state.test_form.error.as_ref().map(|message| {
+        text(format!("⚠ {message}"))
+            .key("test-error")
+            .font(kit.ty.text_xsmall)
+            .color(kit.c.text_base)
+            .padding(4.0)
+    });
+
+    let test_warnings: Option<El> =
+        (!state.test_form.warnings.is_empty()).then(|| {
+            col().key("test-warnings").w_full().gap(2.0).children(
+                state.test_form.warnings.iter().map(|warning| {
+                    text(format!("⚠ {warning}"))
+                        .font(kit.ty.text_xsmall)
+                        .color(kit.c.text_muted)
+                }),
+            )
+        });
+
+    let test_result: Option<El> = state.test_form.outcome.as_ref().map(|outcome| {
+        col()
+            .key("test-result")
+            .w_full()
+            .padding(10.0)
+            .gap(3.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.bg_deep)
+            .child(
+                text(format!("Resistencia: {:.2} MPa", outcome.stress_display))
+                    .font(kit.ty.small)
+                    .color(kit.c.text_base),
+            )
+            .child(
+                text(format!(
+                    "Área {:.2} mm² · esbeltez {:.2} · {}",
+                    outcome.area_mm2, outcome.slenderness, outcome.norm_citation
+                ))
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+            )
+            .child(
+                text(outcome.conformity.clone())
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_muted),
+            )
+    });
+
+    let report_line: Option<El> = state.test_form.report_path.as_ref().map(|path| {
+        text(format!("Informe generado en {path}"))
+            .key("report-path")
+            .font(kit.ty.text_xsmall)
+            .color(kit.c.text_muted)
+            .padding(4.0)
+    });
+
+    let test_history: Option<El> = (!state.test_history.is_empty()).then(|| {
+        col()
+            .key("test-history")
+            .w_full()
+            .gap(2.0)
+            .child(
+                text("Historial de la muestra")
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_muted),
+            )
+            .children(state.test_history.iter().map(|row| {
+                text(format!(
+                    "{} · {} · {} · {}",
+                    row.performed_on, row.designation, row.stress, row.state
+                ))
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_faint)
+            }))
+    });
+
+    let test_panel: El = col()
+        .key("test-panel")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .padding(12.0)
+        .gap(8.0)
+        .radius(kit.radius.md)
+        .fill(kit.c.bg_base)
+        .child(
+            text("Compresión de cilindros")
+                .font(kit.ty.small)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text(
+                "Escribe el código de una muestra ya registrada: el ensayo se guarda a su nombre.",
+            )
+            .font(kit.ty.text_xsmall)
+            .color(kit.c.text_faint),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Muestra",
+                    "H-2026-0001",
+                    &state.test_form.sample_code,
+                    |s: &mut AppState| &mut s.test_form.sample_code,
+                ))
+                .child(field(
+                    "Designación",
+                    "C1",
+                    &state.test_form.designation,
+                    |s: &mut AppState| &mut s.test_form.designation,
+                ))
+                .child(field(
+                    "Edad (días)",
+                    "28",
+                    &state.test_form.age,
+                    |s: &mut AppState| &mut s.test_form.age,
+                )),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Diámetro (mm)",
+                    "150",
+                    &state.test_form.diameter,
+                    |s: &mut AppState| &mut s.test_form.diameter,
+                ))
+                .child(field(
+                    "Altura (mm)",
+                    "300",
+                    &state.test_form.height,
+                    |s: &mut AppState| &mut s.test_form.height,
+                ))
+                .child(field(
+                    "Masa (g)",
+                    "12300",
+                    &state.test_form.mass,
+                    |s: &mut AppState| &mut s.test_form.mass,
+                )),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(field(
+                    "Carga máxima (kN)",
+                    "500",
+                    &state.test_form.load,
+                    |s: &mut AppState| &mut s.test_form.load,
+                ))
+                .child(action("calculate-test", "Calcular", |s: &mut AppState| {
+                    s.calculate_test()
+                }))
+                .child(action("save-test", "Guardar ensayo", |s: &mut AppState| {
+                    s.save_test()
+                }))
+                .child(action("report-pdf", "Informe PDF", |s: &mut AppState| {
+                    s.generate_report()
+                })),
+        )
+        .children(test_error)
+        .children(test_warnings)
+        .children(test_result)
+        .children(report_line)
+        .children(test_history);
+
     // ------------------------------------------------------------------ tabla
     let table = Table::new(
         |s: &AppState| &s.table,
@@ -418,11 +598,11 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         .fill(kit.c.bg_base)
         .child(table);
 
-    // El área de trabajo muestra el formulario o la tabla, nunca los dos compitiendo por
-    // el alto: con ambos a la vez, el formulario se comprimía y sus botones quedaban
-    // fuera del alcance del puntero.
+    // El área de trabajo muestra el formulario, el ensayo o la tabla.
     let body: El = if state.form_open {
         form_panel
+    } else if state.nav == Nav::Concrete {
+        test_panel
     } else {
         table_card
     };

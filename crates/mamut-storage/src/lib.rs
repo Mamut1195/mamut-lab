@@ -73,10 +73,11 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
         4,
         include_str!("../migrations/V004__normalize_legacy_units.sql"),
     ),
+    (5, include_str!("../migrations/V005__attachments.sql")),
 ];
 
 /// Versión de esquema que conoce esta compilación.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// La base de datos local.
 pub struct Database {
@@ -229,7 +230,7 @@ mod tests {
     #[test]
     fn migrar_aplica_todas_las_versiones() {
         let mut db = Database::open_in_memory().unwrap();
-        assert_eq!(db.migrate(now()).unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(db.migrate(now()).unwrap(), vec![1, 2, 3, 4, 5]);
         assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
     }
 
