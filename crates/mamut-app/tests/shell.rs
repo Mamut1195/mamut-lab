@@ -1512,3 +1512,63 @@ fn la_granulometria_sin_d60_no_guarda_un_diametro_imposible() {
     );
     assert!(tests[0].result_value > 0.0, "y el valor no es cero");
 }
+
+#[test]
+fn el_ensayo_guardado_se_puede_releer_con_sus_datos_y_su_autor() {
+    let mut rt = runtime_with_store();
+    // Muestra con un responsable distinto del actor local.
+    {
+        use mamut_core::{Actor, CivilDate};
+        use mamut_domain::{Material, Sample, SampleCode};
+        let sample = Sample::new(
+            SampleCode::new("S-2026-0080").unwrap(),
+            Material::Soil,
+            "Calicata 2",
+            "Constructora Andina",
+            "Torre Norte",
+            CivilDate::new(2026, 11, 1).unwrap(),
+            Actor::new("ana", "Ana Torres").unwrap(),
+            Timestamp::from_millis(1_763_500_000_000),
+        )
+        .unwrap();
+        let store = rt.state.store.as_ref().unwrap();
+        store
+            .create_sample(
+                &sample,
+                &sample.responsible,
+                Timestamp::from_millis(1_763_500_000_000),
+            )
+            .unwrap();
+    }
+
+    press(&mut rt, "nav-3");
+    rt.state.soils.sample.text = "S-2026-0080".to_owned();
+    rt.state.soils.test_date.text = "2026-03-15".to_owned();
+    rt.state.soils.total.text = "1000".to_owned();
+    for (index, value) in ["0", "100", "200", "300", "200"].iter().enumerate() {
+        rt.state.soils.rows[index].retained.text = (*value).to_owned();
+    }
+    press(&mut rt, "calculate-granulometry");
+    press(&mut rt, "granulometry-pdf");
+    assert!(rt.state.soils.error.is_none(), "{:?}", rt.state.soils.error);
+
+    let store = rt.state.store.as_ref().expect("almacén");
+    let tests = store.soil_tests_for("S-2026-0080").unwrap();
+    assert_eq!(tests.len(), 1);
+    // G1: los datos originales se pueden releer.
+    assert!(
+        tests[0].inputs.contains("tamices"),
+        "los datos originales deben leerse de vuelta: {}",
+        tests[0].inputs
+    );
+    assert!(tests[0].fingerprint.len() == 64);
+    assert_eq!(tests[0].created_by, "ana", "lo firma el responsable");
+
+    // G4: la fecha es la del ensayo, no la de emisión.
+    assert_eq!(tests[0].performed_on, "2026-03-15");
+
+    // G3: el informe queda firmado por el responsable.
+    let reports = store.reports_for("S-2026-0080").unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].issued_by, "ana");
+}

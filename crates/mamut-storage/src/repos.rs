@@ -769,9 +769,15 @@ pub struct SoilTestRecord {
     pub id: String,
     pub kind: String,
     pub descriptor_code: String,
+    /// Datos originales del ensayo, en JSON.
+    pub inputs: String,
     pub result_value: f64,
     pub result_unit: String,
+    pub engine_version: String,
+    pub fingerprint: String,
     pub performed_on: String,
+    pub created_by: String,
+    pub created_at: String,
 }
 
 pub struct SoilTestRepository<'a> {
@@ -809,7 +815,8 @@ impl<'a> SoilTestRepository<'a> {
 
     pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<SoilTestRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, kind, descriptor_code, result_value, result_unit, performed_on
+            "SELECT id, kind, descriptor_code, inputs, result_value, result_unit,
+                    engine_version, fingerprint, performed_on, created_by, created_at
              FROM soil_test WHERE sample_id = ?1 ORDER BY created_at ASC",
         )?;
         let rows = statement.query_map(params![sample_id.to_string()], |row| {
@@ -817,9 +824,14 @@ impl<'a> SoilTestRepository<'a> {
                 id: row.get(0)?,
                 kind: row.get(1)?,
                 descriptor_code: row.get(2)?,
-                result_value: row.get(3)?,
-                result_unit: row.get(4)?,
-                performed_on: row.get(5)?,
+                inputs: row.get(3)?,
+                result_value: row.get(4)?,
+                result_unit: row.get(5)?,
+                engine_version: row.get(6)?,
+                fingerprint: row.get(7)?,
+                performed_on: row.get(8)?,
+                created_by: row.get(9)?,
+                created_at: row.get(10)?,
             })
         })?;
         let mut out = Vec::new();
@@ -858,6 +870,7 @@ pub struct ReportRecord {
     pub subject: String,
     pub path: String,
     pub sha256: String,
+    pub issued_by: String,
     pub issued_at: String,
 }
 
@@ -890,7 +903,7 @@ impl<'a> ReportRepository<'a> {
 
     pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<ReportRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, kind, subject, path, sha256, issued_at
+            "SELECT id, kind, subject, path, sha256, issued_by, issued_at
              FROM report WHERE sample_id = ?1 ORDER BY issued_at ASC",
         )?;
         let rows = statement.query_map(params![sample_id.to_string()], |row| {
@@ -900,7 +913,8 @@ impl<'a> ReportRepository<'a> {
                 subject: row.get(2)?,
                 path: row.get(3)?,
                 sha256: row.get(4)?,
-                issued_at: row.get(5)?,
+                issued_by: row.get(5)?,
+                issued_at: row.get(6)?,
             })
         })?;
         let mut out = Vec::new();

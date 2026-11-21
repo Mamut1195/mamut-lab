@@ -540,6 +540,12 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                     |s: &mut AppState| &mut s.test_form.designation,
                 ))
                 .child(field(
+                    "Fecha del ensayo",
+                    "AAAA-MM-DD",
+                    &state.test_form.date,
+                    |s: &mut AppState| &mut s.test_form.date,
+                ))
+                .child(field(
                     "Edad (días)",
                     "28",
                     &state.test_form.age,
@@ -856,6 +862,12 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
                     "S-2026-0001",
                     &state.soils.sample,
                     |s: &mut AppState| &mut s.soils.sample,
+                ))
+                .child(field(
+                    "Fecha del ensayo",
+                    "AAAA-MM-DD",
+                    &state.soils.test_date,
+                    |s: &mut AppState| &mut s.soils.test_date,
                 ))
                 .child(field(
                     "Masa seca total (g)",

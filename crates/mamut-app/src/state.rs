@@ -35,6 +35,25 @@ pub const SAMPLE_LIMIT: usize = 500;
 /// muestra, no solo que «alguien» lo hizo.
 pub const LOCAL_ACTOR_ID: &str = "local";
 
+/// Fecha del ensayo a partir del texto `AAAA-MM-DD`; vacío significa hoy.
+///
+/// Sin esto, un Proctor hecho el día 3 y tecleado el 20 quedaba fechado el 20, en el PDF y
+/// en la base.
+fn parse_iso_date(text: &str) -> Option<CivilDate> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Some(CivilDate::today(&SystemClock));
+    }
+    let parts: Vec<&str> = trimmed.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let year: i32 = parts[0].parse().ok()?;
+    let month: u32 = parts[1].parse().ok()?;
+    let day: u32 = parts[2].parse().ok()?;
+    CivilDate::new(year, month, day).ok()
+}
+
 /// Tamaño legible de un archivo, sin truncar a cero.
 fn human_size(bytes: i64) -> String {
     let bytes = bytes.max(0);
@@ -205,6 +224,8 @@ pub struct SoilsOutcome {
 pub struct SoilsForm {
     /// Código de la muestra a la que se asocia el informe.
     pub sample: TextEdit,
+    /// Fecha real del ensayo (`AAAA-MM-DD`); vacío significa hoy.
+    pub test_date: TextEdit,
     pub total: TextEdit,
     pub rows: Vec<SieveRow>,
     pub error: Option<String>,
@@ -218,6 +239,7 @@ impl SoilsForm {
     pub fn empty() -> Self {
         let mut form = Self {
             sample: TextEdit::new(""),
+            test_date: TextEdit::new(""),
             total: TextEdit::new(""),
             rows: Vec::new(),
             error: None,
@@ -479,6 +501,8 @@ pub struct TestForm {
     input: Option<CylinderCompressionInput>,
     /// Identificador del ensayo ya guardado.
     pub saved: Option<String>,
+    /// Fecha real del ensayo (`AAAA-MM-DD`); vacío significa hoy.
+    pub date: TextEdit,
     /// Firma de los campos con los que se calculó: si cambian, el resultado caduca.
     pub computed_from: Option<String>,
     pub report_path: Option<String>,
@@ -501,6 +525,7 @@ impl TestForm {
             saved: None,
             report_path: None,
             computed_from: None,
+            date: TextEdit::new(""),
         }
     }
 
@@ -964,7 +989,8 @@ impl AppState {
             let test = TestRecord::new(
                 descriptor,
                 specimen.id,
-                CivilDate::today(&SystemClock),
+                parse_iso_date(&self.test_form.date.text)
+                    .ok_or_else(|| "la fecha del ensayo no es válida (usa AAAA-MM-DD)".to_owned())?,
                 sample.responsible.clone(),
                 now,
             );
@@ -1102,7 +1128,7 @@ impl AppState {
                 .map(|d| d.method_kind.label().to_owned())
                 .unwrap_or_else(|| "Normativo".to_owned()),
             norm_citation: Some(outcome.norm_citation.clone()),
-            performed_on: today,
+            performed_on: parse_iso_date(&self.test_form.date.text).unwrap_or(today),
             operator: sample.responsible.name.clone(),
             equipment: None,
             measurements: vec![
@@ -1144,8 +1170,8 @@ impl AppState {
 
                 // El informe deja constancia: registro con hash y ensayo en estado informado.
                 let registration = (|| -> crate::store::StoreResult<()> {
-                    let actor = Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio")
-                        .map_err(|error| error.to_string())?;
+                    // Firma quien responde del ensayo, no un literal.
+                    let actor = sample.responsible.clone();
                     let at = SystemClock.now();
                     let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
                     store.save_report(&code, "compresion", &test_id, &path, &bytes, &actor, at)?;
@@ -1455,7 +1481,7 @@ impl AppState {
             client: sample.client.clone(),
             project: sample.project.clone(),
             received_on: sample.received_on,
-            performed_on: today,
+            performed_on: parse_iso_date(&self.soils.test_date.text).unwrap_or(today),
             operator: sample.responsible.name.clone(),
             total_dry_g: outcome.total_g,
             sieves,
@@ -1508,6 +1534,7 @@ impl AppState {
                     headline,
                     "% que pasa el tamiz más fino",
                     &shown,
+                    &self.emission_actor(),
                 ) {
                     Ok(()) => {
                         self.soils.report_path = Some(shown.clone());
@@ -1831,6 +1858,7 @@ impl AppState {
     /// Se hace **después** de escribir el PDF porque el registro incluye su SHA-256. Si el
     /// registro falla, el archivo existe pero queda sin constancia: el aviso lo dice en vez
     /// de fingir que todo fue bien.
+    #[allow(clippy::too_many_arguments)]
     fn register_emission(
         &self,
         kind: &'static str,
@@ -1839,15 +1867,16 @@ impl AppState {
         result_value: f64,
         result_unit: &'static str,
         path: &str,
+        actor: &Actor,
     ) -> std::result::Result<(), String> {
         let Some(store) = &self.store else {
             return Err("no hay almacenamiento disponible".to_owned());
         };
         let code = self.soils.sample.text.trim().to_owned();
-        let actor = Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio")
-            .map_err(|error| error.to_string())?;
         let now = SystemClock.now();
-        let performed_on = CivilDate::today(&SystemClock).to_iso();
+        let performed_on = parse_iso_date(&self.soils.test_date.text)
+            .ok_or_else(|| "la fecha del ensayo no es válida (usa AAAA-MM-DD)".to_owned())?
+            .to_iso();
 
         let test_id = store.save_soil_test(crate::store::SoilTestDraft {
             code: &code,
@@ -1857,13 +1886,13 @@ impl AppState {
             result_value,
             result_unit,
             performed_on: &performed_on,
-            actor: &actor,
+            actor,
             at: now,
         })?;
 
         let file = std::path::Path::new(path);
         let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
-        store.save_report(&code, kind, &test_id, file, &bytes, &actor, now)?;
+        store.save_report(&code, kind, &test_id, file, &bytes, actor, now)?;
         Ok(())
     }
 
@@ -1951,7 +1980,7 @@ impl AppState {
             test_name: test_name.to_owned(),
             method_label: "Normativo".to_owned(),
             norm_citation: Some(citation.to_owned()),
-            performed_on: today,
+            performed_on: parse_iso_date(&self.soils.test_date.text).unwrap_or(today),
             operator: sample.responsible.name.clone(),
             equipment: None,
             measurements,
@@ -2049,6 +2078,7 @@ impl AppState {
                     outcome.liquid_limit,
                     "%",
                     &path,
+                    &self.emission_actor(),
                 ) {
                     Ok(()) => self.flash = Some(format!("Informe de Atterberg: {path}")),
                     Err(message) => {
@@ -2139,6 +2169,7 @@ impl AppState {
                 peak.max_dry_density,
                 "g/cm³",
                 &path,
+                &self.emission_actor(),
             ) {
                 Ok(()) => self.flash = Some(format!("Informe de compactación: {path}")),
                 Err(message) => {
@@ -2211,6 +2242,7 @@ impl AppState {
                 outcome.percent,
                 "%",
                 &path,
+                &self.emission_actor(),
             ) {
                 Ok(()) => self.flash = Some(format!("Informe de CBR: {path}")),
                 Err(message) => {
@@ -2298,6 +2330,7 @@ impl AppState {
                 outcome.relative_compaction,
                 "%",
                 &path,
+                &self.emission_actor(),
             ) {
                 Ok(()) => self.flash = Some(format!("Informe de densidad: {path}")),
                 Err(message) => {
@@ -2409,6 +2442,24 @@ impl AppState {
                 "los datos cambiaron desde el cálculo: vuelve a calcular antes de guardar o emitir"
                     .to_owned(),
             ),
+        }
+    }
+
+    /// Quién firma la emisión: el responsable de la muestra, no un literal.
+    ///
+    /// Antes toda emisión quedaba registrada como «Operador de laboratorio» mientras el PDF
+    /// imprimía otra persona: la base y el papel decían cosas distintas.
+    fn emission_actor(&self) -> Actor {
+        let code = self.soils.sample.text.trim();
+        if let Some(store) = &self.store
+            && let Ok(Some(sample)) = store.find_sample(code)
+        {
+            return sample.responsible;
+        }
+        match Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio") {
+            Ok(actor) => actor,
+            // Valores literales: la construcción no puede fallar.
+            Err(_) => unreachable!("el actor por defecto es válido"),
         }
     }
 
