@@ -105,6 +105,20 @@ fn wrap(text: &str, max: usize) -> Vec<String> {
     for raw in text.lines() {
         let mut current = String::new();
         for word in raw.split_whitespace() {
+            // Una palabra más larga que la línea se parte: si no, se dibuja fuera del
+            // margen y el visor la corta.
+            if word.chars().count() > max {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+                let mut rest: Vec<char> = word.chars().collect();
+                while !rest.is_empty() {
+                    let take = max.min(rest.len());
+                    let chunk: String = rest.drain(..take).collect();
+                    lines.push(chunk);
+                }
+                continue;
+            }
             if current.is_empty() {
                 current.push_str(word);
             } else if current.chars().count() + 1 + word.chars().count() <= max {
@@ -117,6 +131,7 @@ fn wrap(text: &str, max: usize) -> Vec<String> {
         }
         lines.push(current);
     }
+    lines.retain(|line| !line.is_empty());
     if lines.is_empty() {
         lines.push(String::new());
     }
@@ -299,6 +314,16 @@ pub fn render_granulometry_pdf(data: &GranulometryReport) -> Vec<u8> {
     );
 
     l.doc.text(LEFT, 22.0, 16.0, true, &data.laboratory.name);
+    let mut meta = Vec::new();
+    if let Some(address) = &data.laboratory.address {
+        meta.push(address.clone());
+    }
+    if let Some(accreditation) = &data.laboratory.accreditation {
+        meta.push(format!("Acreditación {accreditation}"));
+    }
+    if !meta.is_empty() {
+        l.doc.text(LEFT, 27.0, 8.0, false, &meta.join(" · "));
+    }
     l.doc.line(LEFT, 31.0, RIGHT, 31.0);
     l.doc
         .text(LEFT, 39.0, 12.5, true, "INFORME DE GRANULOMETRÍA");

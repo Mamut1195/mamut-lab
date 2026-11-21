@@ -278,7 +278,9 @@ impl PdfDocument {
         cmap_object.extend_from_slice(b"endstream\nendobj\n");
         push_object(&mut out, &mut offsets, &cmap_object);
 
-        let title = String::from_utf8_lossy(&winansi(&self.title)).into_owned();
+        // El título también se escapa: un código de muestra como «H)2026» cerraría el
+        // literal antes de tiempo y dejaría el diccionario mal formado.
+        let title = pdf_literal(&self.title);
         for (index, page) in self.pages.iter().enumerate() {
             let page_id = 6 + index * 2;
             let content_id = page_id + 1;
@@ -438,5 +440,15 @@ mod tests {
                 bytes[offset] as char
             );
         }
+    }
+
+    #[test]
+    fn el_titulo_con_parentesis_no_rompe_el_pdf() {
+        let doc = PdfDocument::new("Informe H)2026");
+        let text = String::from_utf8_lossy(&doc.save()).into_owned();
+        assert!(
+            text.contains(r"/Title (Informe H\)2026)"),
+            "el paréntesis del título debe ir escapado"
+        );
     }
 }

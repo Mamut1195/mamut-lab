@@ -1104,7 +1104,7 @@ fn las_herramientas_exportan_adjuntan_y_anulan() {
             .flash
             .as_deref()
             .unwrap_or("")
-            .contains("Exportado"),
+            .contains("Exportadas"),
         "{:?}",
         rt.state.flash
     );

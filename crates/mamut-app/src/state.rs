@@ -35,6 +35,18 @@ pub const SAMPLE_LIMIT: usize = 500;
 /// muestra, no solo que «alguien» lo hizo.
 pub const LOCAL_ACTOR_ID: &str = "local";
 
+/// Tamaño legible de un archivo, sin truncar a cero.
+fn human_size(bytes: i64) -> String {
+    let bytes = bytes.max(0);
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// Piezas del ajuste del límite líquido: valor, pendiente, R², número de determinaciones,
 /// aviso de golpes fuera de rango y las determinaciones originales.
 type LimitFitParts = (f64, f64, f64, usize, bool, Vec<(u32, f64)>);
@@ -794,6 +806,10 @@ impl AppState {
             if age_value < 0.0 || age_value.fract() != 0.0 {
                 return Err("la edad debe ser un número entero de días".to_owned());
             }
+            // Un `as u32` saturaría en silencio: 1e20 días se convertiría en u32::MAX.
+            if age_value > 3650.0 {
+                return Err("la edad no puede superar los 3650 días: revisa el dato".to_owned());
+            }
 
             Ok(CylinderCompressionInput {
                 diameter: Length::positive_millimetres(diameter, "diámetro")
@@ -1144,7 +1160,9 @@ impl AppState {
                     .iter()
                     .map(|test| TestRow {
                         performed_on: test.performed_on.to_iso(),
-                        designation: test.descriptor.code.as_str().to_owned(),
+                        designation: store
+                            .specimen_designation(test.specimen_id)
+                            .unwrap_or_else(|_| "—".to_owned()),
                         stress: test
                             .result
                             .as_ref()
@@ -1178,9 +1196,9 @@ impl AppState {
                     .iter()
                     .map(|record| {
                         format!(
-                            "{} · {} KB · {}…",
+                            "{} · {} · {}…",
                             record.file_name,
-                            record.bytes / 1024,
+                            human_size(record.bytes),
                             &record.sha256[..12]
                         )
                     })
@@ -1269,7 +1287,17 @@ impl AppState {
             return;
         };
         match store.export_samples(format) {
-            Ok(path) => self.flash = Some(format!("Exportado: {}", path.display())),
+            Ok((path, count)) => {
+                // Si se alcanzó el tope, el archivo está incompleto y hay que decirlo.
+                self.flash = Some(if count >= 10_000 {
+                    format!(
+                        "Exportadas {count} muestras (tope): {} — hay más, exporta por partes",
+                        path.display()
+                    )
+                } else {
+                    format!("Exportadas {count} muestras: {}", path.display())
+                });
+            }
             Err(message) => self.flash = Some(message),
         }
     }
@@ -1291,6 +1319,8 @@ impl AppState {
     pub fn soils_calculate(&mut self) {
         self.soils.error = None;
         self.soils.outcome = None;
+        // Un informe anterior ya no describe este cálculo.
+        self.soils.report_path = None;
 
         let parsed = (|| -> std::result::Result<(f64, Vec<SievePass>), String> {
             let total = parse_number(&self.soils.total.text, "masa seca total")?;
@@ -1893,6 +1923,7 @@ impl AppState {
 
     /// Emite el informe de límites de Atterberg.
     pub fn report_atterberg(&mut self) {
+        self.limits.error = None;
         let Some(outcome) = self.limits.outcome.clone() else {
             self.limits.error = Some("calcula los límites antes de emitir el informe".into());
             return;
@@ -1985,6 +2016,7 @@ impl AppState {
 
     /// Emite el informe de compactación.
     pub fn report_compaction(&mut self) {
+        self.compaction.error = None;
         let Some(peak) = self.compaction.peak.clone() else {
             self.compaction.error = Some("calcula el máximo antes de emitir el informe".into());
             return;
@@ -2066,6 +2098,7 @@ impl AppState {
 
     /// Emite el informe de CBR.
     pub fn report_cbr(&mut self) {
+        self.cbr.error = None;
         let Some(outcome) = self.cbr.outcome.clone() else {
             self.cbr.error = Some("calcula el CBR antes de emitir el informe".into());
             return;
@@ -2137,6 +2170,7 @@ impl AppState {
 
     /// Emite el informe de densidad en sitio.
     pub fn report_density(&mut self) {
+        self.density.error = None;
         let Some(outcome) = self.density.outcome.clone() else {
             self.density.error = Some("calcula la densidad antes de emitir el informe".into());
             return;
@@ -2173,7 +2207,7 @@ impl AppState {
             ReportLine::with_unit(
                 "Desviación de humedad",
                 format!("{:+.1}", outcome.moisture_deviation),
-                "puntos",
+                "puntos porcentuales",
             ),
         ];
         let inputs = serde_json::json!({

@@ -225,6 +225,17 @@ impl Store {
         }
     }
 
+    /// Designación del espécimen de un ensayo, para el historial.
+    pub fn specimen_designation(&self, id: mamut_core::SpecimenId) -> StoreResult<String> {
+        Ok(self
+            .db
+            .specimens()
+            .get(id)
+            .map_err(display)?
+            .map(|specimen| specimen.designation)
+            .unwrap_or_else(|| "—".to_owned()))
+    }
+
     /// Ensayos de una muestra, para el historial.
     pub fn tests_for_sample(&self, code: &str) -> StoreResult<Vec<TestRecord>> {
         let Some(sample) = self.find_sample(code)? else {
@@ -574,7 +585,7 @@ impl Store {
     }
 
     /// Exporta todas las muestras a CSV o XLSX en la carpeta de datos.
-    pub fn export_samples(&self, format: ExportFormat) -> StoreResult<PathBuf> {
+    pub fn export_samples(&self, format: ExportFormat) -> StoreResult<(PathBuf, usize)> {
         let samples = self.db.samples().list(10_000).map_err(display)?;
         let rows: Vec<ExportRow> = samples
             .iter()
@@ -597,12 +608,12 @@ impl Store {
                 let text = samples_to_csv(&rows).map_err(display)?;
                 let path = directory.join("muestras.csv");
                 std::fs::write(&path, text).map_err(display)?;
-                Ok(path)
+                Ok((path, rows.len()))
             }
             ExportFormat::Xlsx => {
                 let path = directory.join("muestras.xlsx");
                 write_samples_xlsx(&path, &rows).map_err(display)?;
-                Ok(path)
+                Ok((path, rows.len()))
             }
         }
     }
@@ -794,11 +805,12 @@ mod tests {
             .create_sample(&sample("H-1"), &actor(), now())
             .unwrap();
 
-        let csv = store.export_samples(ExportFormat::Csv).unwrap();
+        let (csv, count) = store.export_samples(ExportFormat::Csv).unwrap();
+        assert_eq!(count, 1);
         let text = std::fs::read_to_string(&csv).unwrap();
         assert!(text.contains("H-1"), "el CSV contiene la muestra");
 
-        let xlsx = store.export_samples(ExportFormat::Xlsx).unwrap();
+        let (xlsx, _) = store.export_samples(ExportFormat::Xlsx).unwrap();
         let bytes = std::fs::read(&xlsx).unwrap();
         assert!(bytes.starts_with(b"PK"), "el XLSX es un contenedor ZIP");
 
