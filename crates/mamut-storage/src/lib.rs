@@ -19,8 +19,9 @@ use mamut_core::Timestamp;
 use rusqlite::{Connection, params};
 
 pub use repos::{
-    AttachmentRecord, AttachmentRepository, AuditRepository, MeasurementRepository,
-    ResultRepository, SampleRepository, SpecimenRepository, TestRecordRepository,
+    AttachmentRecord, AttachmentRepository, AuditRepository, MeasurementRepository, NewReport,
+    NewSoilTest, ReportRecord, ReportRepository, ResultRepository, SampleRepository,
+    SoilTestRecord, SoilTestRepository, SpecimenRepository, TestRecordRepository,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -74,10 +75,14 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../migrations/V004__normalize_legacy_units.sql"),
     ),
     (5, include_str!("../migrations/V005__attachments.sql")),
+    (
+        6,
+        include_str!("../migrations/V006__soil_tests_and_reports.sql"),
+    ),
 ];
 
 /// Versión de esquema que conoce esta compilación.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// La base de datos local.
 pub struct Database {
@@ -171,6 +176,12 @@ impl Database {
         Ok(applied)
     }
 
+    /// Ejecuta SQL suelto. Solo para pruebas de los disparadores de inmutabilidad.
+    pub fn execute_raw(&self, sql: &str) -> Result<()> {
+        self.conn.execute_batch(sql)?;
+        Ok(())
+    }
+
     /// Versión de esquema aplicada actualmente (0 si nunca se migró).
     pub fn schema_version(&self) -> Result<i64> {
         let exists: i64 = self.conn.query_row(
@@ -215,6 +226,14 @@ impl Database {
     pub fn attachments(&self) -> AttachmentRepository<'_> {
         AttachmentRepository::new(&self.conn)
     }
+
+    pub fn soil_tests(&self) -> SoilTestRepository<'_> {
+        SoilTestRepository::new(&self.conn)
+    }
+
+    pub fn reports(&self) -> ReportRepository<'_> {
+        ReportRepository::new(&self.conn)
+    }
 }
 
 #[cfg(test)]
@@ -234,7 +253,7 @@ mod tests {
     #[test]
     fn migrar_aplica_todas_las_versiones() {
         let mut db = Database::open_in_memory().unwrap();
-        assert_eq!(db.migrate(now()).unwrap(), vec![1, 2, 3, 4, 5]);
+        assert_eq!(db.migrate(now()).unwrap(), vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
     }
 

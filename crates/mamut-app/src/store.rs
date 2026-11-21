@@ -320,6 +320,143 @@ impl Store {
         self.db.audit().append(&entry).map_err(display)?;
         Ok(())
     }
+}
+
+/// Un ensayo de suelos pendiente de guardar.
+pub struct SoilTestDraft<'a> {
+    pub code: &'a str,
+    pub kind: &'a str,
+    pub descriptor: &'a str,
+    /// Datos originales en JSON.
+    pub inputs_json: &'a str,
+    pub result_value: f64,
+    pub result_unit: &'a str,
+    pub performed_on: &'a str,
+    pub actor: &'a Actor,
+    pub at: Timestamp,
+}
+
+impl Store {
+    /// Guarda un ensayo de suelos con sus datos originales.
+    ///
+    /// Hasta la v6 un ensayo de suelos vivía solo en el PDF: si el archivo se perdía no
+    /// quedaba evidencia. El ensayo guardado es inmutable (lo impiden los disparadores).
+    pub fn save_soil_test(&self, draft: SoilTestDraft<'_>) -> StoreResult<String> {
+        let sample = self
+            .find_sample(draft.code)?
+            .ok_or_else(|| format!("no existe la muestra «{}»", draft.code))?;
+
+        let id = mamut_core::AuditId::new().to_string();
+        let fingerprint = mamut_core::hash::hex_digest(
+            format!(
+                "{}|{}",
+                draft.inputs_json,
+                mamut_calculations::ENGINE_VERSION
+            )
+            .as_bytes(),
+        );
+
+        self.db
+            .soil_tests()
+            .insert(
+                sample.id,
+                &mamut_storage::NewSoilTest {
+                    id: &id,
+                    kind: draft.kind,
+                    descriptor_code: draft.descriptor,
+                    inputs: draft.inputs_json,
+                    result_value: draft.result_value,
+                    result_unit: draft.result_unit,
+                    engine_version: mamut_calculations::ENGINE_VERSION,
+                    fingerprint: &fingerprint,
+                    performed_on: draft.performed_on,
+                    created_by: &draft.actor.id,
+                    created_at: &draft.at.to_rfc3339(),
+                },
+            )
+            .map_err(display)?;
+
+        let entry = AuditEntry::new(
+            draft.at,
+            draft.actor.clone(),
+            "soil_test",
+            id.clone(),
+            AuditAction::Created,
+        )
+        .map_err(display)?
+        .with_detail(serde_json::json!({
+            "kind": draft.kind,
+            "muestra": draft.code,
+            "huella": fingerprint,
+        }));
+        self.db.audit().append(&entry).map_err(display)?;
+
+        Ok(id)
+    }
+
+    /// Registra un informe emitido: ruta, hash y vínculo con el ensayo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_report(
+        &self,
+        code: &str,
+        kind: &str,
+        subject: &str,
+        path: &Path,
+        bytes: &[u8],
+        actor: &Actor,
+        at: Timestamp,
+    ) -> StoreResult<()> {
+        let sample = self
+            .find_sample(code)?
+            .ok_or_else(|| format!("no existe la muestra «{code}»"))?;
+        let sha256 = mamut_core::hash::hex_digest(bytes);
+        let id = mamut_core::AuditId::new().to_string();
+
+        self.db
+            .reports()
+            .insert(
+                sample.id,
+                &mamut_storage::NewReport {
+                    id: &id,
+                    kind,
+                    subject,
+                    path: &path.display().to_string(),
+                    sha256: &sha256,
+                    issued_by: &actor.id,
+                    issued_at: &at.to_rfc3339(),
+                },
+            )
+            .map_err(display)?;
+
+        let entry = AuditEntry::new(at, actor.clone(), "report", id, AuditAction::Reported)
+            .map_err(display)?
+            .with_detail(serde_json::json!({
+                "kind": kind,
+                "muestra": code,
+                "sha256": sha256,
+            }));
+        self.db.audit().append(&entry).map_err(display)?;
+        Ok(())
+    }
+
+    /// Ensayos de suelos guardados de una muestra.
+    pub fn soil_tests_for(&self, code: &str) -> StoreResult<Vec<mamut_storage::SoilTestRecord>> {
+        let Some(sample) = self.find_sample(code)? else {
+            return Ok(Vec::new());
+        };
+        self.db
+            .soil_tests()
+            .list_by_sample(sample.id)
+            .map_err(display)
+    }
+
+    /// Informes emitidos de una muestra.
+    pub fn reports_for(&self, code: &str) -> StoreResult<Vec<mamut_storage::ReportRecord>> {
+        let Some(sample) = self.find_sample(code)? else {
+            return Ok(Vec::new());
+        };
+        self.db.reports().list_by_sample(sample.id).map_err(display)
+    }
 
     /// Adjuntos de una muestra.
     pub fn attachments_for(&self, code: &str) -> StoreResult<Vec<AttachmentRecord>> {
@@ -630,6 +767,93 @@ mod tests {
 
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);
+    }
+
+    #[test]
+    fn un_ensayo_de_suelos_se_guarda_con_sus_datos_y_su_huella() {
+        let store = Store::in_memory(now()).unwrap();
+        store
+            .create_sample(&sample("S-1"), &actor(), now())
+            .unwrap();
+
+        let id = store
+            .save_soil_test(SoilTestDraft {
+                code: "S-1",
+                kind: "atterberg",
+                descriptor: "SOIL-ATTERBERG",
+                inputs_json: r#"{"golpes":[[20,45.0],[30,41.0],[40,38.0]]}"#,
+                result_value: 42.8,
+                result_unit: "%",
+                performed_on: "2026-11-21",
+                actor: &actor(),
+                at: now(),
+            })
+            .unwrap();
+        assert_eq!(id.len(), 36);
+
+        let tests = store.soil_tests_for("S-1").unwrap();
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].kind, "atterberg");
+        assert_eq!(tests[0].result_unit, "%");
+        assert_eq!(
+            store.audit_entries("soil_test", &id).unwrap(),
+            1,
+            "el guardado deja auditoría"
+        );
+    }
+
+    #[test]
+    fn un_informe_emitido_queda_registrado_con_su_hash() {
+        let store = Store::in_memory(now()).unwrap();
+        store
+            .create_sample(&sample("S-2"), &actor(), now())
+            .unwrap();
+
+        let path = store.save_pdf("informe-s2", b"%PDF-1.4 contenido").unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        store
+            .save_report("S-2", "atterberg", "test-1", &path, &bytes, &actor(), now())
+            .unwrap();
+
+        let reports = store.reports_for("S-2").unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].kind, "atterberg");
+        assert_eq!(reports[0].sha256.len(), 64);
+        assert!(reports[0].path.contains("informe-s2"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn un_ensayo_de_suelos_guardado_no_se_modifica_ni_se_borra() {
+        let store = Store::in_memory(now()).unwrap();
+        store
+            .create_sample(&sample("S-3"), &actor(), now())
+            .unwrap();
+        store
+            .save_soil_test(SoilTestDraft {
+                code: "S-3",
+                kind: "cbr",
+                descriptor: "SOIL-CBR",
+                inputs_json: "{}",
+                result_value: 12.0,
+                result_unit: "%",
+                performed_on: "2026-11-21",
+                actor: &actor(),
+                at: now(),
+            })
+            .unwrap();
+
+        // Los disparadores de la v6 impiden modificar o borrar un ensayo guardado.
+        let sql = "UPDATE soil_test SET result_value = 99";
+        assert!(
+            store.db.execute_raw(sql).is_err(),
+            "un ensayo guardado no se modifica"
+        );
+        assert!(
+            store.db.execute_raw("DELETE FROM soil_test").is_err(),
+            "un ensayo guardado no se borra"
+        );
     }
 
     #[test]

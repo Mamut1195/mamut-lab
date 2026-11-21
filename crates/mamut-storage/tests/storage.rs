@@ -353,7 +353,7 @@ fn una_copia_de_seguridad_se_crea_y_se_verifica() {
     // La copia se puede abrir y contiene los datos.
     let restored = Database::open(&path).unwrap();
     assert_eq!(restored.samples().count().unwrap(), 1);
-    assert_eq!(restored.schema_version().unwrap(), 5);
+    assert_eq!(restored.schema_version().unwrap(), 6);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

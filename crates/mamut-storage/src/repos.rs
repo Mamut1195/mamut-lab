@@ -745,6 +745,179 @@ impl<'a> AttachmentRepository<'a> {
     }
 }
 
+// -------------------------------------------------------------- ensayos de suelos ---
+
+/// Un ensayo de suelos nuevo, con sus datos originales.
+pub struct NewSoilTest<'a> {
+    pub id: &'a str,
+    pub kind: &'a str,
+    pub descriptor_code: &'a str,
+    /// Datos originales en JSON, tal como se capturaron.
+    pub inputs: &'a str,
+    pub result_value: f64,
+    pub result_unit: &'a str,
+    pub engine_version: &'a str,
+    pub fingerprint: &'a str,
+    pub performed_on: &'a str,
+    pub created_by: &'a str,
+    pub created_at: &'a str,
+}
+
+/// Un ensayo de suelos ya guardado.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoilTestRecord {
+    pub id: String,
+    pub kind: String,
+    pub descriptor_code: String,
+    pub result_value: f64,
+    pub result_unit: String,
+    pub performed_on: String,
+}
+
+pub struct SoilTestRepository<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> SoilTestRepository<'a> {
+    pub(crate) fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    pub fn insert(&self, sample_id: SampleId, test: &NewSoilTest<'_>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO soil_test (
+                 id, sample_id, kind, descriptor_code, inputs, result_value, result_unit,
+                 engine_version, fingerprint, performed_on, created_by, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                test.id,
+                sample_id.to_string(),
+                test.kind,
+                test.descriptor_code,
+                test.inputs,
+                test.result_value,
+                test.result_unit,
+                test.engine_version,
+                test.fingerprint,
+                test.performed_on,
+                test.created_by,
+                test.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<SoilTestRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, kind, descriptor_code, result_value, result_unit, performed_on
+             FROM soil_test WHERE sample_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = statement.query_map(params![sample_id.to_string()], |row| {
+            Ok(SoilTestRecord {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                descriptor_code: row.get(2)?,
+                result_value: row.get(3)?,
+                result_unit: row.get(4)?,
+                performed_on: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM soil_test", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+}
+
+// --------------------------------------------------------------------- informes ---
+
+/// Un informe emitido.
+pub struct NewReport<'a> {
+    pub id: &'a str,
+    pub kind: &'a str,
+    pub subject: &'a str,
+    pub path: &'a str,
+    pub sha256: &'a str,
+    pub issued_by: &'a str,
+    pub issued_at: &'a str,
+}
+
+/// Un informe ya registrado.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReportRecord {
+    pub id: String,
+    pub kind: String,
+    pub subject: String,
+    pub path: String,
+    pub sha256: String,
+    pub issued_at: String,
+}
+
+pub struct ReportRepository<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> ReportRepository<'a> {
+    pub(crate) fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    pub fn insert(&self, sample_id: SampleId, report: &NewReport<'_>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO report (id, kind, subject, sample_id, path, sha256, issued_by, issued_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                report.id,
+                report.kind,
+                report.subject,
+                sample_id.to_string(),
+                report.path,
+                report.sha256,
+                report.issued_by,
+                report.issued_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<ReportRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, kind, subject, path, sha256, issued_at
+             FROM report WHERE sample_id = ?1 ORDER BY issued_at ASC",
+        )?;
+        let rows = statement.query_map(params![sample_id.to_string()], |row| {
+            Ok(ReportRecord {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                subject: row.get(2)?,
+                path: row.get(3)?,
+                sha256: row.get(4)?,
+                issued_at: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM report", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+}
+
 // -------------------------------------------------------------------- ayudas ---
 
 fn parse_sample_state(text: &str) -> Result<SampleState> {

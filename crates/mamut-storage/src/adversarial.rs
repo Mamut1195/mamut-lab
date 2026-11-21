@@ -471,10 +471,10 @@ fn migrar_desde_la_v1_conserva_datos_y_añade_protecciones() {
     let applied = db.migrate(now()).unwrap();
     assert_eq!(
         applied,
-        vec![2, 3, 4, 5],
+        vec![2, 3, 4, 5, 6],
         "se aplican las migraciones pendientes"
     );
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
     assert_eq!(
         db.samples().count().unwrap(),
         1,
