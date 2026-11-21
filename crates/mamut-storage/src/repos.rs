@@ -194,6 +194,44 @@ impl<'a> SpecimenRepository<'a> {
         Ok(())
     }
 
+    /// Un espécimen por su identificador (lo necesita el historial para la edad).
+    pub fn get(&self, id: SpecimenId) -> Result<Option<Specimen>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, sample_id, designation, diameter_mm, height_mm, mass_g, age_days, created_at
+                 FROM specimen WHERE id = ?1",
+                params![id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, f64>(3)?,
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, f64>(5)?,
+                        row.get::<_, u32>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((id, sample, designation, diameter, height, mass, age, created)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(Specimen {
+            id: SpecimenId::from_str(&id)?,
+            sample_id: SampleId::from_str(&sample)?,
+            designation,
+            diameter: Length::millimetres(diameter)?,
+            height: Length::millimetres(height)?,
+            mass: Mass::grams(mass)?,
+            age_days: age,
+            created_at: Timestamp::parse_rfc3339(&created)?,
+        }))
+    }
+
     pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<Specimen>> {
         let mut statement = self.conn.prepare(
             "SELECT id, sample_id, designation, diameter_mm, height_mm, mass_g, age_days, created_at
@@ -626,6 +664,83 @@ impl<'a> AuditRepository<'a> {
         let count: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM audit", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+}
+
+// ------------------------------------------------------------------ adjuntos ---
+
+/// Metadatos de un archivo adjunto. El contenido vive en el almacén de archivos,
+/// direccionado por `sha256`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentRecord {
+    pub file_name: String,
+    pub mime: String,
+    pub sha256: String,
+    pub bytes: i64,
+}
+
+pub struct AttachmentRepository<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> AttachmentRepository<'a> {
+    pub(crate) fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert(
+        &self,
+        sample_id: SampleId,
+        file_name: &str,
+        mime: &str,
+        sha256: &str,
+        bytes: i64,
+        added_by: &str,
+        added_at: Timestamp,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO attachment (id, sample_id, file_name, mime, sha256, bytes, added_by, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                mamut_core::AuditId::new().to_string(),
+                sample_id.to_string(),
+                file_name,
+                mime,
+                sha256,
+                bytes,
+                added_by,
+                added_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_by_sample(&self, sample_id: SampleId) -> Result<Vec<AttachmentRecord>> {
+        let mut statement = self.conn.prepare(
+            "SELECT file_name, mime, sha256, bytes FROM attachment
+             WHERE sample_id = ?1 ORDER BY added_at ASC, file_name ASC",
+        )?;
+        let rows = statement.query_map(params![sample_id.to_string()], |row| {
+            Ok(AttachmentRecord {
+                file_name: row.get(0)?,
+                mime: row.get(1)?,
+                sha256: row.get(2)?,
+                bytes: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM attachment", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(0))
     }
 }

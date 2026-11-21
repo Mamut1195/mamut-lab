@@ -19,8 +19,8 @@ use mamut_core::Timestamp;
 use rusqlite::{Connection, params};
 
 pub use repos::{
-    AuditRepository, MeasurementRepository, ResultRepository, SampleRepository, SpecimenRepository,
-    TestRecordRepository,
+    AttachmentRecord, AttachmentRepository, AuditRepository, MeasurementRepository,
+    ResultRepository, SampleRepository, SpecimenRepository, TestRecordRepository,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -210,6 +210,10 @@ impl Database {
 
     pub fn audit(&self) -> AuditRepository<'_> {
         AuditRepository::new(&self.conn)
+    }
+
+    pub fn attachments(&self) -> AttachmentRepository<'_> {
+        AttachmentRepository::new(&self.conn)
     }
 }
 

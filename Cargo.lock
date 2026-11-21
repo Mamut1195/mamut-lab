@@ -1648,12 +1648,15 @@ dependencies = [
  "mamut-charts",
  "mamut-core",
  "mamut-domain",
+ "mamut-export",
  "mamut-reports",
  "mamut-standards",
  "mamut-storage",
  "mamut-validation",
  "rune",
  "rune-kit",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

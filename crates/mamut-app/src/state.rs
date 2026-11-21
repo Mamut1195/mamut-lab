@@ -256,6 +256,16 @@ pub struct AppState {
     pub test_history: Vec<TestRow>,
     /// Descriptor del ensayo, tomado del paquete normativo al arrancar.
     pub descriptor: Option<TestDescriptor>,
+    /// Código de muestra sobre el que actúan las herramientas (adjuntos, anulación).
+    pub tool_code: TextEdit,
+    /// Ruta del archivo a adjuntar.
+    pub tool_path: TextEdit,
+    /// Motivo de la anulación.
+    pub tool_reason: TextEdit,
+    /// Adjuntos de la muestra seleccionada en las herramientas.
+    pub attachments: Vec<String>,
+    /// Serie resistencia–edad de esa muestra.
+    pub series: Vec<(u32, f64)>,
     /// Mensaje efímero tras una acción correcta.
     pub flash: Option<String>,
 }
@@ -285,6 +295,11 @@ impl AppState {
             test_form: TestForm::empty(),
             test_history: Vec::new(),
             descriptor: None,
+            tool_code: TextEdit::new(""),
+            tool_path: TextEdit::new(""),
+            tool_reason: TextEdit::new(""),
+            attachments: Vec::new(),
+            series: Vec::new(),
             flash: None,
         }
     }
@@ -637,6 +652,9 @@ impl AppState {
                 self.test_form.saved = Some(test_id);
                 self.flash = Some(format!("Ensayo guardado para la muestra {code}"));
                 self.load_test_history();
+                // Las herramientas (adjuntos y gráfico) siguen a la muestra ensayada.
+                self.tool_code = TextEdit::new(code);
+                self.load_tools();
                 self.reload();
             }
             Err(message) => self.test_form.error = Some(message),
@@ -779,6 +797,108 @@ impl AppState {
                 self.test_history.clear();
                 self.flash = Some(format!("no se pudo leer el historial: {error}"));
             }
+        }
+    }
+
+    /// Relee adjuntos y serie de la muestra de las herramientas.
+    pub fn load_tools(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let code = self.tool_code.text.trim().to_owned();
+        if code.is_empty() {
+            self.attachments.clear();
+            self.series.clear();
+            return;
+        }
+        match store.attachments_for(&code) {
+            Ok(records) => {
+                self.attachments = records
+                    .iter()
+                    .map(|record| {
+                        format!(
+                            "{} · {} KB · {}…",
+                            record.file_name,
+                            record.bytes / 1024,
+                            &record.sha256[..12]
+                        )
+                    })
+                    .collect();
+            }
+            Err(error) => self.flash = Some(format!("no se pudieron leer los adjuntos: {error}")),
+        }
+        match store.series_for_sample(&code) {
+            Ok(series) => self.series = series,
+            Err(error) => self.flash = Some(format!("no se pudo leer la serie: {error}")),
+        }
+    }
+
+    /// Adjunta el archivo indicado a la muestra indicada.
+    pub fn attach_tool(&mut self) {
+        let code = self.tool_code.text.trim().to_owned();
+        let path = self.tool_path.text.trim().to_owned();
+        if code.is_empty() || path.is_empty() {
+            self.flash = Some("indica la muestra y la ruta del archivo".to_owned());
+            return;
+        }
+        let Some(store) = &self.store else {
+            self.flash = Some("no hay almacenamiento disponible".to_owned());
+            return;
+        };
+        match store.attach_file(
+            &code,
+            std::path::Path::new(&path),
+            &Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio")
+                .unwrap_or_else(|_| unreachable!("el actor local es válido")),
+            SystemClock.now(),
+        ) {
+            Ok(summary) => {
+                self.flash = Some(format!("Adjuntado: {summary}"));
+                self.load_tools();
+            }
+            Err(message) => self.flash = Some(message),
+        }
+    }
+
+    /// Anula la muestra indicada, con su motivo.
+    pub fn void_tool(&mut self) {
+        let code = self.tool_code.text.trim().to_owned();
+        let reason = self.tool_reason.text.trim().to_owned();
+        if code.is_empty() {
+            self.flash = Some("indica la muestra a anular".to_owned());
+            return;
+        }
+        if reason.is_empty() {
+            self.flash = Some("la anulación exige un motivo".to_owned());
+            return;
+        }
+        let Some(store) = &self.store else {
+            self.flash = Some("no hay almacenamiento disponible".to_owned());
+            return;
+        };
+        let actor = match Actor::new(LOCAL_ACTOR_ID, "Operador de laboratorio") {
+            Ok(actor) => actor,
+            Err(_) => return,
+        };
+        match store.void_sample(&code, &actor, SystemClock.now(), &reason) {
+            Ok(()) => {
+                self.flash = Some(format!("Muestra {code} anulada"));
+                self.reload();
+                self.load_tools();
+            }
+            Err(message) => self.flash = Some(message),
+        }
+    }
+
+    /// Exporta las muestras y deja la ruta en el aviso.
+    pub fn export_tool(&mut self, format: crate::store::ExportFormat) {
+        let Some(store) = &self.store else {
+            self.flash = Some("no hay almacenamiento disponible".to_owned());
+            return;
+        };
+        match store.export_samples(format) {
+            Ok(path) => self.flash = Some(format!("Exportado: {}", path.display())),
+            Err(message) => self.flash = Some(message),
         }
     }
 

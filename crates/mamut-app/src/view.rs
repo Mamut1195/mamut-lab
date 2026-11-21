@@ -4,11 +4,53 @@
 //! estado ya contiene y delega las acciones en sus métodos. Todo lo que se ve aquí se
 //! puede probar sin abrir una ventana.
 
+use mamut_charts::{LineChartSpec, Rect, Scale, line_chart};
 use mamut_domain::Material;
+use rune::shape::Shape;
 use rune::{Cx, El, Key, KeyEvent, Tx, col, el, row, text};
 use rune_kit::{Cell, Kit, SortDir, Table, TableColumn, TextField};
 
 use crate::state::{AppState, Nav, SampleRow};
+use crate::store::ExportFormat;
+
+/// Serie resistencia–edad como polilínea, para el gráfico del ensayo.
+///
+/// La geometría la calcula `mamut-charts` (probada sin ventana); aquí solo se convierte
+/// en un trazo de Rune.
+fn series_shape(series: &[(u32, f64)], width: f32, height: f32, color: rune::Color) -> Shape {
+    if series.len() < 2 {
+        return Shape::new();
+    }
+    let points: Vec<(f64, f64)> = series
+        .iter()
+        .map(|(age, stress)| (f64::from(*age), *stress))
+        .collect();
+    let x_min = points[0].0;
+    let x_max = points[points.len() - 1].0;
+    let y_min = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let y_max = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+
+    if x_max <= x_min || y_max <= y_min {
+        return Shape::new();
+    }
+
+    let spec = LineChartSpec {
+        points: &points,
+        plot: Rect::new(0.0, 0.0, width, height),
+        x: Scale::Linear {
+            min: x_min,
+            max: x_max,
+        },
+        y: Scale::Linear {
+            min: y_min,
+            max: y_max,
+        },
+        x_ticks: Vec::new(),
+        y_ticks: Vec::new(),
+        limits: Vec::new(),
+    };
+    Shape::new().stroke(line_chart(&spec).line, 1.5, color)
+}
 
 /// Atajos de teclado del armazón.
 ///
@@ -445,6 +487,21 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
             }))
     });
 
+    let chart: Option<El> = (state.series.len() >= 2).then(|| {
+        el().key("series-chart")
+            .w_full()
+            .h(120.0)
+            .padding(8.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.bg_deep)
+            .shape(series_shape(
+                &state.series,
+                900.0,
+                110.0,
+                rune::tok::accent(0, dark),
+            ))
+    });
+
     let test_panel: El = col()
         .key("test-panel")
         .w_full()
@@ -537,7 +594,92 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         .children(test_warnings)
         .children(test_result)
         .children(report_line)
-        .children(test_history);
+        .children(test_history)
+        .children(chart);
+
+    // ------------------------------------------------ herramientas de la muestra
+    let export_button = |key: &'static str, label: &'static str, format: ExportFormat| {
+        el().key(key)
+            .padding(8.0)
+            .radius(kit.radius.sm)
+            .fill(kit.c.layer_02)
+            .focusable(true)
+            .child(text(label).font(kit.ty.text_small).color(kit.c.text_base))
+            .on_press(move |s: &mut AppState| s.export_tool(format))
+    };
+
+    let attachments_list: Option<El> = (!state.attachments.is_empty()).then(|| {
+        col()
+            .key("attachments")
+            .w_full()
+            .gap(1.0)
+            .children(state.attachments.iter().map(|attachment| {
+                text(attachment.clone())
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_faint)
+            }))
+    });
+
+    let tools_panel: El = col()
+        .key("tools-panel")
+        .w_full()
+        .padding(10.0)
+        .gap(6.0)
+        .radius(kit.radius.md)
+        .fill(kit.c.bg_base)
+        .child(
+            text("Herramientas de la muestra")
+                .font(kit.ty.text_xsmall)
+                .color(kit.c.text_muted),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Muestra",
+                    "H-2026-0001",
+                    &state.tool_code,
+                    |s: &mut AppState| &mut s.tool_code,
+                ))
+                .child(field(
+                    "Archivo a adjuntar (ruta)",
+                    "C:\\ruta\\foto.jpg",
+                    &state.tool_path,
+                    |s: &mut AppState| &mut s.tool_path,
+                ))
+                .child(action("attach-file", "Adjuntar", |s: &mut AppState| {
+                    s.attach_tool()
+                })),
+        )
+        .child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .child(field(
+                    "Motivo de anulación",
+                    "muestra duplicada",
+                    &state.tool_reason,
+                    |s: &mut AppState| &mut s.tool_reason,
+                ))
+                .child(action("void-sample", "Anular", |s: &mut AppState| {
+                    s.void_tool()
+                }))
+                .child(export_button(
+                    "export-csv",
+                    "Exportar CSV",
+                    ExportFormat::Csv,
+                ))
+                .child(export_button(
+                    "export-xlsx",
+                    "Exportar XLSX",
+                    ExportFormat::Xlsx,
+                ))
+                .child(action("tools-refresh", "Actualizar", |s: &mut AppState| {
+                    s.load_tools()
+                })),
+        )
+        .children(attachments_list);
 
     // ------------------------------------------------------------------ tabla
     let table = Table::new(
@@ -598,13 +740,23 @@ pub fn view(state: &AppState, cx: &mut Cx<AppState>) -> El {
         .fill(kit.c.bg_base)
         .child(table);
 
-    // El área de trabajo muestra el formulario, el ensayo o la tabla.
+    // La sección de muestras combina la tabla con sus herramientas.
+    let samples_body: El = col()
+        .key("samples-body")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .gap(8.0)
+        .child(table_card)
+        .child(tools_panel);
+
+    // El área de trabajo muestra el formulario, el ensayo o las muestras.
     let body: El = if state.form_open {
         form_panel
     } else if state.nav == Nav::Concrete {
         test_panel
     } else {
-        table_card
+        samples_body
     };
 
     // ------------------------------------------------------------------ paleta

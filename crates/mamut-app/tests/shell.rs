@@ -557,3 +557,78 @@ fn la_coma_decimal_se_acepta_al_escribir() {
         rt.state.test_form.error
     );
 }
+
+// ------------------------------------------------- herramientas de la muestra ---
+
+#[test]
+fn las_herramientas_exportan_adjuntan_y_anulan() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0010");
+    press(&mut rt, "nav-1");
+
+    press(&mut rt, "export-csv");
+    assert!(
+        rt.state
+            .flash
+            .as_deref()
+            .unwrap_or("")
+            .contains("Exportado"),
+        "{:?}",
+        rt.state.flash
+    );
+
+    let directory = std::env::temp_dir().join(format!("mamut-tools-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("informe.pdf");
+    std::fs::write(&file, b"%PDF-1.4 prueba").unwrap();
+
+    rt.state.tool_code.text = "H-2026-0010".to_owned();
+    rt.state.tool_path.text = file.display().to_string();
+    press(&mut rt, "attach-file");
+
+    assert_eq!(
+        rt.state.attachments.len(),
+        1,
+        "el adjunto debe quedar registrado: {:?}",
+        rt.state.flash
+    );
+    assert!(rt.presented("attachments").is_some());
+
+    rt.state.tool_reason.text = "muestra duplicada".to_owned();
+    press(&mut rt, "void-sample");
+
+    assert!(
+        rt.state.rows.iter().any(|row| row.state == "Anulada"),
+        "la muestra debe quedar anulada en la tabla: {:?}",
+        rt.state.flash
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn dos_ensayos_dibujan_el_grafico_resistencia_edad() {
+    let mut rt = runtime_with_store();
+    seed_sample(&mut rt, "H-2026-0011");
+    press(&mut rt, "nav-2");
+
+    for (index, (age, load)) in [(7u32, 300.0f64), (28, 500.0)].into_iter().enumerate() {
+        fill_test_form(&mut rt, "H-2026-0011");
+        rt.state.test_form.designation.text = format!("C{}", index + 1);
+        rt.state.test_form.age.text = age.to_string();
+        rt.state.test_form.load.text = load.to_string();
+        press(&mut rt, "calculate-test");
+        press(&mut rt, "save-test");
+        assert!(
+            rt.state.test_form.error.is_none(),
+            "ensayo {index}: {:?}",
+            rt.state.test_form.error
+        );
+    }
+
+    assert_eq!(rt.state.series.len(), 2, "{:?}", rt.state.series);
+    assert!(
+        rt.presented("series-chart").is_some(),
+        "con dos edades distintas debe dibujarse el gráfico"
+    );
+}

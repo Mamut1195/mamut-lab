@@ -11,10 +11,18 @@
 use std::path::{Path, PathBuf};
 
 use mamut_core::{Actor, AuditAction, AuditEntry, Timestamp};
-use mamut_domain::{Measurement, ResultRef, Sample, Specimen, TestRecord};
-use mamut_storage::Database;
+use mamut_domain::{Measurement, ResultRef, Sample, SampleState, Specimen, TestRecord};
+use mamut_export::{SampleRow as ExportRow, samples_to_csv, write_samples_xlsx};
+use mamut_storage::{AttachmentRecord, Database};
 
 use crate::state::SampleRow;
+
+/// Formato de exportación disponible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Csv,
+    Xlsx,
+}
 
 /// Error de almacenamiento ya traducido a algo que se puede mostrar al usuario.
 pub type StoreResult<T> = std::result::Result<T, String>;
@@ -178,10 +186,204 @@ impl Store {
         };
         self.db.tests().list_by_sample(sample.id).map_err(display)
     }
+
+    /// Adjunta un archivo a una muestra: copia el contenido al almacén direccionado por
+    /// su SHA-256 y guarda solo los metadatos.
+    ///
+    /// El original **no se mueve ni se modifica**: se copia. Si el mismo archivo ya está
+    /// adjunto a esa muestra, se avisa en lugar de duplicarlo.
+    pub fn attach_file(
+        &self,
+        code: &str,
+        source: &Path,
+        actor: &Actor,
+        at: Timestamp,
+    ) -> StoreResult<String> {
+        let sample = self
+            .find_sample(code)?
+            .ok_or_else(|| format!("no existe la muestra «{code}»"))?;
+
+        let bytes = std::fs::read(source).map_err(display)?;
+        if bytes.is_empty() {
+            return Err("el archivo está vacío".to_owned());
+        }
+        let sha256 = mamut_core::hash::hex_digest(&bytes);
+
+        let file_name = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "adjunto".to_owned());
+
+        let directory = self.data_dir.join("attachments").join(&sha256);
+        std::fs::create_dir_all(&directory).map_err(display)?;
+        let destination = directory.join(sanitize(&file_name));
+        if !destination.exists() {
+            std::fs::write(&destination, &bytes).map_err(display)?;
+        }
+
+        let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        if let Err(error) = self.db.attachments().insert(
+            sample.id,
+            &file_name,
+            mime_for(&file_name),
+            &sha256,
+            size,
+            &actor.id,
+            at,
+        ) {
+            let text = error.to_string();
+            if text.contains("UNIQUE") {
+                return Err(format!("«{file_name}» ya está adjunto a esta muestra"));
+            }
+            return Err(text);
+        }
+
+        let entry = AuditEntry::new(
+            at,
+            actor.clone(),
+            "sample",
+            sample.id.to_string(),
+            AuditAction::Created,
+        )
+        .map_err(display)?
+        .with_detail(serde_json::json!({ "attachment": file_name, "sha256": sha256 }));
+        self.db.audit().append(&entry).map_err(display)?;
+
+        Ok(format!("{file_name} ({})", &sha256[..12]))
+    }
+
+    /// Adjuntos de una muestra.
+    pub fn attachments_for(&self, code: &str) -> StoreResult<Vec<AttachmentRecord>> {
+        let Some(sample) = self.find_sample(code)? else {
+            return Ok(Vec::new());
+        };
+        self.db
+            .attachments()
+            .list_by_sample(sample.id)
+            .map_err(display)
+    }
+
+    /// Anula una muestra: no se borra, se marca y se registra el motivo.
+    pub fn void_sample(
+        &self,
+        code: &str,
+        actor: &Actor,
+        at: Timestamp,
+        reason: &str,
+    ) -> StoreResult<()> {
+        let mut sample = self
+            .find_sample(code)?
+            .ok_or_else(|| format!("no existe la muestra «{code}»"))?;
+        sample
+            .transition(SampleState::Voided)
+            .map_err(|error| error.to_string())?;
+        self.db
+            .samples()
+            .update_state(sample.id, sample.state, sample.revision)
+            .map_err(display)?;
+
+        let entry = AuditEntry::new(
+            at,
+            actor.clone(),
+            "sample",
+            sample.id.to_string(),
+            AuditAction::Voided,
+        )
+        .map_err(display)?
+        .with_detail(serde_json::json!({ "motivo": reason }));
+        self.db.audit().append(&entry).map_err(display)?;
+        Ok(())
+    }
+
+    /// Serie resistencia–edad de una muestra, para el gráfico.
+    pub fn series_for_sample(&self, code: &str) -> StoreResult<Vec<(u32, f64)>> {
+        let Some(sample) = self.find_sample(code)? else {
+            return Ok(Vec::new());
+        };
+        let tests = self.db.tests().list_by_sample(sample.id).map_err(display)?;
+        let mut series = Vec::new();
+        for test in tests {
+            let Some(result) = &test.result else { continue };
+            let Ok(Some(specimen)) = self.db.specimens().get(test.specimen_id) else {
+                continue;
+            };
+            series.push((specimen.age_days, result.value));
+        }
+        series.sort_by_key(|(age, _)| *age);
+        Ok(series)
+    }
+
+    /// Exporta todas las muestras a CSV o XLSX en la carpeta de datos.
+    pub fn export_samples(&self, format: ExportFormat) -> StoreResult<PathBuf> {
+        let samples = self.db.samples().list(10_000).map_err(display)?;
+        let rows: Vec<ExportRow> = samples
+            .iter()
+            .map(|sample| ExportRow {
+                code: sample.code.as_str().to_owned(),
+                material: sample.material.as_str().to_owned(),
+                origin: sample.origin.clone(),
+                client: sample.client.clone(),
+                project: sample.project.clone(),
+                received_on: sample.received_on.to_iso(),
+                responsible: sample.responsible.name.clone(),
+                state: sample.state.as_str().to_owned(),
+            })
+            .collect();
+
+        let directory = self.data_dir.join("exports");
+        std::fs::create_dir_all(&directory).map_err(display)?;
+        match format {
+            ExportFormat::Csv => {
+                let text = samples_to_csv(&rows).map_err(display)?;
+                let path = directory.join("muestras.csv");
+                std::fs::write(&path, text).map_err(display)?;
+                Ok(path)
+            }
+            ExportFormat::Xlsx => {
+                let path = directory.join("muestras.xlsx");
+                write_samples_xlsx(&path, &rows).map_err(display)?;
+                Ok(path)
+            }
+        }
+    }
 }
 
 fn display<E: std::fmt::Display>(error: E) -> String {
     error.to_string()
+}
+
+/// Deja un nombre de archivo seguro: sin separadores ni caracteres raros.
+fn sanitize(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.trim_matches('_').is_empty() {
+        "adjunto".to_owned()
+    } else {
+        cleaned
+    }
+}
+
+/// Tipo MIME por extensión. Suficiente para clasificar adjuntos de laboratorio.
+fn mime_for(name: &str) -> &'static str {
+    let extension = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "csv" => "text/csv",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "txt" => "text/plain",
+        _ => "application/octet-stream",
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +464,91 @@ mod tests {
     fn sin_ensayos_el_contador_es_cero() {
         let store = Store::in_memory(now()).unwrap();
         assert_eq!(store.test_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn adjuntar_copia_el_archivo_y_lo_registra() {
+        let store = Store::in_memory(now()).unwrap();
+        let muestra = sample("H-2026-0001");
+        store.create_sample(&muestra, &actor(), now()).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("mamut-attach-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("foto.png");
+        std::fs::write(&file, b"contenido de prueba").unwrap();
+
+        let summary = store
+            .attach_file("H-2026-0001", &file, &actor(), now())
+            .unwrap();
+        assert!(summary.contains("foto.png"));
+
+        let attachments = store.attachments_for("H-2026-0001").unwrap();
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].file_name, "foto.png");
+        assert_eq!(attachments[0].mime, "image/png");
+        assert_eq!(attachments[0].sha256.len(), 64);
+
+        // El contenido se copia al almacén direccionado por hash.
+        let stored = store
+            .data_dir()
+            .join("attachments")
+            .join(&attachments[0].sha256)
+            .join("foto.png");
+        assert!(stored.exists(), "el archivo debe copiarse al almacén");
+
+        // El mismo archivo no se duplica en la misma muestra.
+        assert!(
+            store
+                .attach_file("H-2026-0001", &file, &actor(), now())
+                .is_err()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn anular_una_muestra_cambia_el_estado_y_deja_auditoria() {
+        let store = Store::in_memory(now()).unwrap();
+        let muestra = sample("H-2");
+        store.create_sample(&muestra, &actor(), now()).unwrap();
+
+        store
+            .void_sample("H-2", &actor(), now(), "muestra duplicada")
+            .unwrap();
+
+        let rows = store.sample_rows(10).unwrap();
+        assert_eq!(rows[0].state, "Anulada");
+        assert_eq!(
+            store
+                .audit_entries("sample", &muestra.id.to_string())
+                .unwrap(),
+            2,
+            "alta + anulación"
+        );
+    }
+
+    #[test]
+    fn exportar_escribe_csv_y_xlsx() {
+        let store = Store::in_memory(now()).unwrap();
+        store
+            .create_sample(&sample("H-1"), &actor(), now())
+            .unwrap();
+
+        let csv = store.export_samples(ExportFormat::Csv).unwrap();
+        let text = std::fs::read_to_string(&csv).unwrap();
+        assert!(text.contains("H-1"), "el CSV contiene la muestra");
+
+        let xlsx = store.export_samples(ExportFormat::Xlsx).unwrap();
+        let bytes = std::fs::read(&xlsx).unwrap();
+        assert!(bytes.starts_with(b"PK"), "el XLSX es un contenedor ZIP");
+
+        let _ = std::fs::remove_file(csv);
+        let _ = std::fs::remove_file(xlsx);
+    }
+
+    #[test]
+    fn la_serie_resistencia_edad_sale_ordenada() {
+        let store = Store::in_memory(now()).unwrap();
+        assert!(store.series_for_sample("no-existe").unwrap().is_empty());
     }
 }
